@@ -20,6 +20,7 @@ import {
 } from '../../../utils/housingTables';
 import type { ITableView } from '../../../utils/tableView';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
+import { DormitoriesModal } from './DormitoriesModal';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import styles from './DormitoryTab.module.css';
 import { StayMoveModal } from './StayMoveModal';
@@ -55,9 +56,9 @@ const sameAddress = (a: string | null, b: string): boolean => (a ?? '').trim().t
  * «Общежитие»), поиск по ФИО — по всем; №, Подразделение организации, Сотрудник (ссылка на карточку), Дата въезда,
  * Дата выезда, Паспорт (полный — с правом «Реквизитов»), Крайний проход (до конца месяца), Крайний проход на объекте,
  * Начальник участка, Комментарий; ширина столбцов — как в Excel. «История» — все закончившиеся записи (с
- * комментарием), месяц на неё не влияет. С правом правки — «Заселить» (с комментарием), ✎ (даты, выезд, комментарий,
- * «Переселить в другое общежитие…»), 🗑 —
- * ошибочная запись. Уволенные подсвечены, галочка «Уволенные» в фильтре «Сотрудника» их скрывает.
+ * комментарием), месяц на неё не влияет. «Справочник» — справочник общежитий (миграция 377): при заселении и
+ * переселении общежитие выбирают из него. С правом правки — «Заселить» (с комментарием), ✎ (даты, выезд, комментарий,
+ * «Переселить в другое общежитие…»), 🗑 — ошибочная запись. Уволенные подсвечены, галочка «Уволенные» в фильтре «Сотрудника» их скрывает.
  */
 export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
   canEdit, addresses, month, cardBackPath, onChanged,
@@ -66,6 +67,7 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
   const selectId = useId();
   const [place, setPlace] = useState(ALL);
   const [showHistory, setShowHistory] = useState(false);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const [editor, setEditor] = useState<Editor>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -144,6 +146,9 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
       >
         История
       </button>
+      <button type="button" className={styles.toggle} onClick={() => setDirectoryOpen(true)}>
+        Справочник
+      </button>
     </div>
   );
 
@@ -179,7 +184,8 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
 
       {editor?.mode === 'add' && (
         <DormitoryStayModal
-          addresses={place === ALL ? addresses : [place, ...addresses.filter(item => !sameAddress(item, place))]}
+          addresses={addresses}
+          {...(place === ALL ? {} : { initialAddress: place })}
           fixedKind="dormitory"
           withComment
           onClose={() => setEditor(null)}
@@ -207,6 +213,9 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
           onClose={() => setEditor(null)}
           onSaved={onChanged}
         />
+      )}
+      {directoryOpen && (
+        <DormitoriesModal canEdit={canEdit} onClose={() => setDirectoryOpen(false)} onChanged={onChanged} />
       )}
     </>
   );

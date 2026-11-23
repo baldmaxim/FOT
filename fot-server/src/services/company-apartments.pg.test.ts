@@ -221,6 +221,8 @@ describe.skipIf(!PG_URL)('служебные квартиры «Проживан
   it('переселение: общежитие → квартира с даты, повтор — то же, то же место, дата не позже въезда, выехал раньше', async () => {
     const apartment = (await listApartments()).find(item => item.address === '3-й Митинский пер. 5-201')!;
     const dormitory = (await listStaysOfClass('dormitory', [4]))[0];
+    // Справочник общежитий (377): переселяют только в общежитие из него.
+    await run(`INSERT INTO dormitory_addresses (address) VALUES ('Общ. Свободы 35')`);
 
     expect(await moveStay(dormitory.id, '2026-09-01', { apartmentId: apartment.id })).toBe('before_check_in');
     expect(await moveStay(dormitory.id, '2026-11-19', { address: 'общ. верхнелихоборская 6' })).toBe('same_place');
@@ -241,11 +243,13 @@ describe.skipIf(!PG_URL)('служебные квартиры «Проживан
     // Компенсацию не переселяют.
     const compensation = (await listStaysOfClass('compensation', [5]))[0];
     expect(await moveStay(compensation.id, '2026-11-19', { address: 'Общ. Свободы 35' })).toBe('not_movable');
-    // Обратно в общежитие — адрес запоминается в подсказках.
-    const back = await moveStay((moved as { opened: { id: number } }).opened.id, '2026-11-20', { address: 'Общ. Свободы 35' });
+    // Обратно в общежитие — только из справочника, его написанием; справочник сервис не пополняет.
+    const openedId = (moved as { opened: { id: number } }).opened.id;
+    expect(await moveStay(openedId, '2026-11-20', { address: 'Общ. Новое' })).toBe('not_in_directory');
+    const back = await moveStay(openedId, '2026-11-20', { address: 'общ. свободы 35' });
     expect(back).toMatchObject({ opened: { apartment_id: null, address: 'Общ. Свободы 35' } });
     expect((await run(`SELECT address FROM dormitory_addresses ORDER BY id`)).rows.map(row => row.address))
-      .toContain('Общ. Свободы 35');
+      .not.toContain('Общ. Новое');
   });
 
   it('переселение сохраняет запланированный выезд: новая запись — с даты переселения до прежнего выезда', async () => {

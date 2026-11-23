@@ -19,7 +19,7 @@ import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
-import { DormitoryAddressField } from './DormitoryAddressField';
+import { DormitorySelect } from './DormitorySelect';
 
 /** Заселение из «Зарплаты» («Справочник» → «Общежитие»): только общежитие, свои поиск и запись. */
 export interface IDormitoryStayModalPayroll {
@@ -30,8 +30,10 @@ export interface IDormitoryStayModalPayroll {
 interface IDormitoryStayModalProps {
   /** Передано — правка этого проживания (сотрудник не меняется); нет — добавление. */
   stay?: IDormitoryStay;
-  /** Сохранённые адреса общежитий — подсказки под полем «Адрес / номер». */
+  /** Названия общежитий справочника (миграция 377) — выбор общежития. */
   addresses: readonly string[];
+  /** Общежитие по умолчанию при заселении (выбрано в селекте вкладки). */
+  initialAddress?: string;
   /** Передано — заселение из «Зарплаты» (окно поверх таблицы «Справочника»); нет — вкладка кадров. */
   payroll?: IDormitoryStayModalPayroll;
   /** Вид задан вкладкой («Общежитие», «Компенсация аренды», миграция 371): переключателя нет. */
@@ -58,13 +60,13 @@ const COMMENT_MAX_LENGTH = 500;
 
 /**
  * «Добавить сотрудника» и ✎ во вкладке «Проживание»: сотрудник (поиск по ФИО), вид (общежитие или квартира —
- * при правке не меняется), дата въезда, дата выезда (пусто — живёт). Общежитие — адрес или номер (сохранённые —
- * списком под полем); квартира — адрес по желанию. Сумму квартиры кадры не задают: новой сервер ставит ставку
+ * при правке не меняется), дата въезда, дата выезда (пусто — живёт). Общежитие — выбором из справочника (миграция
+ * 377); квартира — адрес по желанию. Сумму квартиры кадры не задают: новой сервер ставит ставку
  * «Доплата за проживание», меняет её «Зарплата». Ошибка сервера — под полями, ввод не теряется. Из «Зарплаты»
  * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника».
  */
 export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
-  stay, addresses, payroll, fixedKind, apartment, onMove, moveLabel = 'Переселить в другое общежитие или квартиру…',
+  stay, addresses, initialAddress, payroll, fixedKind, apartment, onMove, moveLabel = 'Переселить в другое общежитие или квартиру…',
   extraAction, raised = false, withComment = false, onClose, onSaved,
 }) => {
   const errorId = useId();
@@ -76,7 +78,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   const [employee, setEmployee] = useState<IDormitoryCandidate | null>(null);
   const [checkIn, setCheckIn] = useState(stay?.check_in ?? '');
   const [checkOut, setCheckOut] = useState(stay?.check_out ?? '');
-  const [address, setAddress] = useState(stay?.address ?? '');
+  const [address, setAddress] = useState(stay?.address ?? initialAddress ?? '');
   const [comment, setComment] = useState(stay?.comment ?? '');
   const isApartment = kind === 'apartment';
   const [error, setError] = useState<{ field: DormitoryStayField | null; message: string } | null>(null);
@@ -216,19 +218,16 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
           />
         </label>
       ) : (
-        /* Не обёрткой <label>: в её текст попали бы адреса списка. */
         <div className={styles.field}>
-          <label htmlFor={addressId} className={styles.label}>Адрес / номер</label>
-          <DormitoryAddressField
+          <label htmlFor={addressId} className={styles.label}>Общежитие</label>
+          <DormitorySelect
             id={addressId}
             options={addresses}
             value={address}
-            onValueChange={value => { setAddress(value); clearError(); }}
-            maxLength={DORMITORY_ADDRESS_MAX_LENGTH}
+            onChange={value => { setAddress(value); clearError(); }}
             disabled={saving}
-            aria-invalid={invalid('address')}
-            aria-describedby={error ? errorId : undefined}
-            clearLabel="Очистить адрес"
+            invalid={invalid('address') === true}
+            describedBy={error ? errorId : undefined}
           />
         </div>
       )}

@@ -156,6 +156,7 @@ const MOVE_ERRORS: Record<string, { status: number; error: string }> = {
   not_found: { status: 404, error: 'Запись не найдена' },
   not_movable: { status: 400, error: 'Переселяют только из общежития или служебной квартиры' },
   apartment_not_found: { status: 404, error: 'Квартира не найдена' },
+  not_in_directory: { status: 400, error: 'Выберите общежитие из справочника («Общежитие» → «Справочник»)' },
   same_place: { status: 400, error: 'Сотрудник уже живёт здесь' },
   before_check_in: { status: 400, error: 'Дата переселения должна быть позже даты въезда' },
   not_open: { status: 400, error: 'В эту дату сотрудник здесь уже не живёт' },

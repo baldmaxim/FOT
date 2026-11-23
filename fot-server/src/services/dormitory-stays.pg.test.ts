@@ -55,6 +55,7 @@ vi.mock('../config/contractor.js', () => ({
 import {
   addStay, deleteStay, getEmployeeState, listAddresses, listPayrollDormitoryStays, listStays, searchCandidates, updateStay,
 } from './dormitory-stays.service.js';
+import { addDormitory, deleteDormitory, listDormitories, updateDormitory } from './dormitory-directory.service.js';
 import { currentRateMonth, deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 import {
   finishCompensationPause, resumeCompensation, suspendCompensation, type ICompensationPauseResult,
@@ -253,7 +254,23 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect((await run(`SELECT suspended, resumed_from_id FROM employee_dormitory_stays`)).rows)
       .toEqual([{ suspended: false, resumed_from_id: null }]);
     expect((await run(`SELECT count(*)::int AS n FROM company_apartments`)).rows).toEqual([{ n: 0 }]);
-    await run(`DELETE FROM employee_dormitory_stays`);
+    // Справочник общежитий (377): 8 из таблицы 1С + название записи «Общ1», которого в 1С нет; повтор безопасен.
+    await run(migration('377_dormitory_directory.sql'));
+    await run(migration('377_dormitory_directory.sql'));
+    const directory = await listDormitories();
+    expect(directory).toHaveLength(9);
+    expect(directory.find(item => item.address === 'Общ. Свободы 35'))
+      .toMatchObject({ doc_date: '2025-09-22', doc_number: '000000009', place_price: '550.00' });
+    expect(directory.find(item => item.address === 'Общ. Мал.Почтовая 2\\2'))
+      .toMatchObject({ doc_date: '2026-03-04', doc_number: '000000002', place_price: '600.00' });
+    expect(directory.find(item => item.address === 'Общ. База Мытищи'))
+      .toMatchObject({ doc_number: '000000004', place_price: null });
+    expect(directory.find(item => item.address === 'Общ1')).toMatchObject({ doc_date: null, doc_number: null, place_price: null });
+    await expect(run(`UPDATE dormitory_addresses SET place_price = 0 WHERE address = 'Общ1'`)).rejects.toThrow(/dormitory_address_place_price/);
+    await run(`DELETE FROM employee_dormitory_stays; DELETE FROM dormitory_addresses WHERE address = 'Общ1'`);
+    // Общежития следующих тестов.
+    await run(`INSERT INTO dormitory_addresses (address) VALUES
+      ('Общежитие №2, комн. 14'), ('Общежитие №3'), ('Общежитие №4'), ('Внутри'), ('Общежитие №2'), ('Пересечение')`);
   });
 
   it('периоды не пересекаются; въезд в день выезда — можно; выезд = въезд — нельзя', async () => {
@@ -301,20 +318,45 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(await listStays({})).toHaveLength(2);
   });
 
-  it('адреса: запоминаются при добавлении и правке, без повторов; пересечение адрес не пишет; удаление не стирает', async () => {
-    // Из прошлых тестов: «Общежитие №2, комн. 14» (добавление), «Общежитие №3» (добавление, удалено выше),
-    // «Общежитие №2» (добавление); «Общежитие №4» и «Внутри» — отказ по пересечению.
-    expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2']);
-
+  it('общежитие — только из справочника: его написание; не из справочника — отказ, справочник не пополняется', async () => {
+    const before = await listAddresses();
     const [stay] = await listStays({ employeeIds: [2] });
-    await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'Общ. Нагатинская 34' });
-    await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'ОБЩ. НАГАТИНСКАЯ 34' });
-    expect(await listAddresses()).toEqual(['Общежитие №2, комн. 14', 'Общежитие №3', 'Общежитие №2', 'Общ. Нагатинская 34']);
-    expect(await addStay(2, { kind: 'dormitory', amount: null, check_in: '2026-09-16', check_out: '2026-09-18', address: 'Пересечение' })).toBe('overlap');
-    expect(await listAddresses()).not.toContain('Пересечение');
+    // Другой регистр — пишется написание справочника.
+    expect(await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'ОБЩ. НАГАТИНСКАЯ 34' }))
+      .toMatchObject({ after: { address: 'Общ. Нагатинская 34' } });
+    await expect(updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: stay.check_out, address: 'Общ. Новое' }))
+      .rejects.toMatchObject({ code: 'DORMITORY_NOT_IN_DIRECTORY' });
+    await expect(addStay(1, { kind: 'dormitory', amount: null, check_in: '2027-05-01', check_out: null, address: 'Общ. Новое' }))
+      .rejects.toMatchObject({ code: 'DORMITORY_NOT_IN_DIRECTORY' });
+    expect(await listAddresses()).toEqual(before);
+    // Старое название, которого нет в справочнике, можно оставить — правка дат не блокируется.
+    await run(`UPDATE employee_dormitory_stays SET address = 'Общ. Старое' WHERE id = ${stay.id}`);
+    expect(await updateStay(stay.id, { amount: null, check_in: stay.check_in, check_out: '2026-09-19', address: 'общ. старое' }))
+      .toMatchObject({ after: { address: 'Общ. Старое', check_out: '2026-09-19' } });
 
     await deleteStay(stay.id);
-    expect(await listAddresses()).toContain('Общ. Нагатинская 34');
+    expect(await listAddresses()).toEqual(before);
+  });
+
+  it('377: справочник — добавить, дубль, переименование переписывает записи общежития, удалить — только без записей', async () => {
+    const added = await addDormitory({ address: 'Общ. Тестовая 1', doc_date: '2026-11-23', doc_number: '000000020', place_price: 480.5 });
+    if (added === 'duplicate') throw new Error('общежитие не добавлено');
+    expect(added).toMatchObject({ address: 'Общ. Тестовая 1', doc_date: '2026-11-23', doc_number: '000000020', place_price: '480.50' });
+    expect(await addDormitory({ address: ' общ. тестовая 1 ', doc_date: null, doc_number: null, place_price: null })).toBe('duplicate');
+    const stay = await addStay(1, { kind: 'dormitory', amount: null, check_in: '2027-06-01', check_out: null, address: 'общ. тестовая 1' });
+    expect(stay).toMatchObject({ address: 'Общ. Тестовая 1' });
+
+    const renamed = await updateDormitory(added.id, { address: 'Общ. Тестовая 2', doc_date: null, doc_number: null, place_price: null });
+    expect(renamed).toMatchObject({ readdressed: 1, after: { address: 'Общ. Тестовая 2', place_price: null } });
+    expect((await listStays({ employeeIds: [1] })).find(item => item.check_in === '2027-06-01')).toMatchObject({ address: 'Общ. Тестовая 2' });
+    expect(await updateDormitory(added.id, { address: 'Общ. Свободы 35', doc_date: null, doc_number: null, place_price: null })).toBe('duplicate');
+    expect(await updateDormitory(99999, { address: 'Х', doc_date: null, doc_number: null, place_price: null })).toBeNull();
+
+    expect(await deleteDormitory(added.id)).toBe('has_stays');
+    if (stay === 'overlap') throw new Error('проживание не добавлено');
+    await deleteStay(stay.id);
+    expect(await deleteDormitory(added.id)).toMatchObject({ address: 'Общ. Тестовая 2' });
+    expect(await deleteDormitory(added.id)).toBeNull();
   });
 
   it('поиск: только работающие, не в архиве, не подрядчики, в охвате', async () => {

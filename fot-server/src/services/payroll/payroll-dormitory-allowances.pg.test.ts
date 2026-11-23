@@ -368,6 +368,8 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     });
 
     it('в один день — одно место: общежитие поверх квартиры — пересечение', async () => {
+      // Общежитие — из справочника (миграция 377).
+      await run(`INSERT INTO dormitory_addresses (address) VALUES ('Общ3') ON CONFLICT DO NOTHING`);
       expect(await addStay(3, { kind: 'dormitory', check_in: '2026-11-01', check_out: '2026-11-10', address: 'Общ3', amount: null }))
         .toBe('overlap');
       // Со дня выезда из квартиры — можно.

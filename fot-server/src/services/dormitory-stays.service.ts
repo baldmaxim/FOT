@@ -9,8 +9,8 @@
  * диапазон [въезд, выезд)). Отдел и должность — текущие, как в списке кадров.
  * Запись — под lockPayrollEmployee (тот же замок, что у доплат «Зарплаты»): квартира в днях «Доплаты за
  * общежитие» — DormitoryAllowanceConflictError (одна доплата из двух).
- * Адрес общежития запоминается в dormitory_addresses (миграция 319) — подсказки поля «Адрес / номер»;
- * удаление проживания адрес не трогает.
+ * Общежитие — только из справочника (dormitory_addresses, миграции 319 и 377, dormitory-directory.service.ts):
+ * пишется его написание, названия не из справочника — DormitoryNotInDirectoryError; сам сервис справочник не пополняет.
  * Служебная квартира (миграция 371) — вид dormitory со ссылкой apartment_id; адрес проживания — копия «Кв. <адрес>»
  * квартиры (её меняет только правка квартиры, company-apartments.service.ts), в подсказки не попадает. Классы записей —
  * STAY_CLASS_SQL.
@@ -22,6 +22,7 @@ import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../utils/fio-search.utils.js';
 import { effectiveDepartmentSql } from './employees-export.service.js';
+import { DormitoryNotInDirectoryError, resolveDormitoryName } from './dormitory-directory.service.js';
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
 import { HOUSING_RATE_CODE } from './payroll/payroll-rates.service.js';
@@ -263,12 +264,9 @@ export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEm
     [employeeId, await getContractorRootId()],
   );
 
-/** Запомнить адрес общежития для подсказок; такой уже есть (без учёта регистра) — остаётся прежнее написание. */
-const REMEMBER_ADDRESS_SQL = `INSERT INTO dormitory_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING`;
-
-/** Сохранённые адреса общежитий — подсказки поля «Адрес / номер», в порядке добавления. */
+/** Названия общежитий справочника (миграции 319, 377) — выбор общежития при заселении, в порядке названия. */
 export const listAddresses = async (): Promise<string[]> =>
-  (await query<{ address: string }>(`SELECT address FROM dormitory_addresses ORDER BY id`)).map(row => row.address);
+  (await query<{ address: string }>(`SELECT address FROM dormitory_addresses ORDER BY address, id`)).map(row => row.address);
 
 /**
  * Сумма по умолчанию для квартиры — значение ставки «Доплата за проживание» (code housing) на текущий месяц
@@ -280,18 +278,12 @@ export const getHousingRateAmount = async (): Promise<string | null> =>
     [HOUSING_RATE_CODE, moscowTodayIso()],
   ))?.amount ?? null;
 
-/**
- * После записи: адрес общежития — в подсказки (служебная квартира — нет: её адрес у квартиры); квартира — без доплаты
- * за общежитие в добавленных днях.
- */
+/** После записи: квартира — без доплаты за общежитие в добавленных днях. */
 const afterWrite = async (
   client: PoolClient,
   stay: { employee_id: number; kind: DormitoryStayKind; apartment_id?: number | null } & IDormitoryStayFields,
   previous: { check_in: string; check_out: string | null } | null,
 ): Promise<void> => {
-  if (stay.kind === 'dormitory' && stay.address && !stay.apartment_id) {
-    await client.query(REMEMBER_ADDRESS_SQL, [stay.address]);
-  }
   if (stay.kind === 'apartment') {
     await assertApartmentWithoutDormitoryAllowance(client, stay.employee_id, stay, previous);
   }
@@ -328,6 +320,11 @@ export const openPauseOf = async (client: PoolClient, employeeId: number): Promi
   )).rows[0]?.paused_from ?? null
 );
 
+/** Одно название без учёта регистра и пробелов по краям. */
+const sameName = (a: string | null, b: string | null): boolean => (
+  (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase()
+);
+
 /** Служебной квартиры, в которую заселяют, нет (удалили) — ответ 404. */
 export class CompanyApartmentNotFoundError extends Error {
   constructor() {
@@ -340,7 +337,8 @@ export class CompanyApartmentNotFoundError extends Error {
  * Добавить проживание. Жилец служебной квартиры (apartment_id) — адрес «Кв. <адрес>» берётся из квартиры в той же
  * транзакции (FOR SHARE: переименование квартиры дождётся записи); квартиры нет — CompanyApartmentNotFoundError.
  * Пересечение с другим проживанием сотрудника — 'overlap'; квартира в днях доплаты за общежитие —
- * DormitoryAllowanceConflictError (запись откатывается); компенсация при незавершённой паузе — CompensationPausedError.
+ * DormitoryAllowanceConflictError (запись откатывается); компенсация при незавершённой паузе — CompensationPausedError;
+ * общежития нет в справочнике — DormitoryNotInDirectoryError.
  */
 export const addStay = async (
   employeeId: number,
@@ -361,6 +359,9 @@ export const addStay = async (
         )).rows[0];
         if (!apartment) throw new CompanyApartmentNotFoundError();
         address = `Кв. ${apartment.address}`;
+      } else if (input.kind === 'dormitory') {
+        address = await resolveDormitoryName(client, input.address);
+        if (address === null) throw new DormitoryNotInDirectoryError();
       }
       const row = (await client.query<{ id: number }>(
         `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount, apartment_id)
@@ -382,7 +383,9 @@ export const addStay = async (
  * Изменить даты, адрес и сумму (вид не меняется); amount null — сумма прежняя (кадры сумму квартиры не задают,
  * у общежития её нет). У жильца служебной квартиры адрес прежний (меняется только правкой квартиры) — даже если
  * прислан другой. Проживания нет — null; пересечение — 'overlap'; квартира в добавленных днях доплаты
- * за общежитие — DormitoryAllowanceConflictError. Возвращает прежнюю и новую строки: аудит пишет «было → стало».
+ * за общежитие — DormitoryAllowanceConflictError. Общежитие — из справочника (его написание); прежнее название записи,
+ * которого в справочнике нет, можно оставить — правка дат старой записи не блокируется; другое не из справочника —
+ * DormitoryNotInDirectoryError. Возвращает прежнюю и новую строки: аудит пишет «было → стало».
  */
 export const updateStay = async (
   id: number,
@@ -396,6 +399,13 @@ export const updateStay = async (
       await lockPayrollEmployee(client, current.employee_id);
       const before = await readStay(client, id, true);
       if (!before) return null;
+      let address = input.address;
+      if (before.kind === 'dormitory' && before.apartment_id === null) {
+        const resolved = await resolveDormitoryName(client, input.address);
+        if (resolved !== null) address = resolved;
+        else if (sameName(input.address, before.address)) address = before.address;
+        else throw new DormitoryNotInDirectoryError();
+      }
       await client.query(
         `UPDATE employee_dormitory_stays
             SET check_in = $2::date, check_out = $3::date,
@@ -405,11 +415,11 @@ export const updateStay = async (
                 suspended = CASE WHEN $3::date IS NULL THEN false ELSE suspended END,
                 updated_at = now()
           WHERE id = $1`,
-        [id, input.check_in, input.check_out, input.address, input.amount],
+        [id, input.check_in, input.check_out, address, input.amount],
       );
       await afterWrite(
         client,
-        { employee_id: before.employee_id, kind: before.kind, apartment_id: before.apartment_id, ...input },
+        { employee_id: before.employee_id, kind: before.kind, apartment_id: before.apartment_id, ...input, address },
         before,
       );
       const after = await readStay(client, id, false);

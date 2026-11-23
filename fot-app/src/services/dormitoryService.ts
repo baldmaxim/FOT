@@ -39,6 +39,26 @@ export interface IDormitoryStay {
   resumed_from_id?: number | null;
 }
 
+/** Общежитие справочника (миграции 319, 377): как «Общежития» 1С. */
+export interface IDormitory {
+  id: number;
+  /** Общежитие — название / адрес. */
+  address: string;
+  /** «Дата» — YYYY-MM-DD. */
+  doc_date: string | null;
+  /** «Номер» — как в 1С. */
+  doc_number: string | null;
+  /** «Стоимость места», ₽ — только для информации, numeric строкой. */
+  place_price: string | null;
+}
+
+export interface IDormitoryPayload {
+  address: string;
+  doc_date: string | null;
+  doc_number: string | null;
+  place_price: number | null;
+}
+
 /** Служебная квартира компании (миграция 371). */
 export interface ICompanyApartment {
   id: number;
@@ -140,8 +160,10 @@ interface IApiResponse<T> { success: boolean; data: T }
 /** Общий префикс: правка во вкладке кадров перечитывает и таблицу «Справочника». */
 export const DORMITORY_STAYS_KEY = ['dormitory-stays'] as const;
 export const PAYROLL_DORMITORY_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'payroll'] as const;
-/** Под тем же префиксом: сохранение проживания перечитывает и подсказки адресов. */
+/** Под тем же префиксом: любая правка «Проживания» перечитывает и названия общежитий справочника. */
 export const DORMITORY_ADDRESSES_KEY = [...DORMITORY_STAYS_KEY, 'addresses'] as const;
+/** Справочник общежитий (миграция 377) — под тем же префиксом. */
+export const DORMITORY_DIRECTORY_KEY = [...DORMITORY_STAYS_KEY, 'directory'] as const;
 /** Вкладки «Проживания» (миграция 371) — под тем же префиксом: любая правка перечитывает открытые. */
 export const DORMITORY_APARTMENTS_KEY = [...DORMITORY_STAYS_KEY, 'apartments'] as const;
 export const DORMITORY_RESIDENTS_KEY = [...DORMITORY_STAYS_KEY, 'residents'] as const;
@@ -172,7 +194,7 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** Подсказки «Адрес / номер» окну заселения «Зарплаты» — те же сохранённые адреса, что у кадров. */
+  /** Названия общежитий справочника — окну заселения «Зарплаты», те же, что у кадров. */
   listAddressesForPayroll: async (signal?: AbortSignal): Promise<string[]> => {
     const res = await apiClient.get<IApiResponse<string[]>>('/payroll/dormitory-addresses', { signal });
     return res.data;
@@ -196,7 +218,7 @@ export const dormitoryService = {
     return res.data;
   },
 
-  /** Сохранённые адреса (миграция 319) — подсказки «Адрес / номер»; не пропадают вместе с проживаниями. */
+  /** Названия общежитий справочника (миграции 319, 377) — выбор общежития при заселении, правке и переселении. */
   listAddresses: async (signal?: AbortSignal): Promise<string[]> => {
     const res = await apiClient.get<IApiResponse<string[]>>('/dormitory/addresses', { signal });
     return res.data;
@@ -249,6 +271,29 @@ export const dormitoryService = {
    */
   move: async (stayId: number, date: string, target: StayMoveTarget, comment: string | null = null): Promise<void> => {
     await apiClient.post(`/dormitory/stays/${stayId}/move`, { date, ...target, ...(comment ? { comment } : {}) });
+  },
+
+  /** Справочник общежитий (миграция 377): Дата, Номер, Общежитие, Стоимость места. */
+  listDormitories: async (signal?: AbortSignal): Promise<IDormitory[]> => {
+    const res = await apiClient.get<IApiResponse<IDormitory[]>>('/dormitory/dormitories', { signal });
+    return res.data;
+  },
+
+  /** Такое название уже есть — ApiError 409. */
+  addDormitory: async (payload: IDormitoryPayload): Promise<IDormitory> => {
+    const res = await apiClient.post<IApiResponse<IDormitory>>('/dormitory/dormitories', payload);
+    return res.data;
+  },
+
+  /** Новое название меняется и у всех записей общежития (в том числе в «Истории»). */
+  updateDormitory: async (id: number, payload: IDormitoryPayload): Promise<IDormitory> => {
+    const res = await apiClient.patch<IApiResponse<IDormitory>>(`/dormitory/dormitories/${id}`, payload);
+    return res.data;
+  },
+
+  /** Только общежитие, где никто никогда не жил, — иначе ApiError 409. */
+  removeDormitory: async (id: number): Promise<void> => {
+    await apiClient.delete(`/dormitory/dormitories/${id}`);
   },
 
   /** Вкладка «Квартира»: квартиры и жильцы (сейчас и история) в охвате списка кадров. */

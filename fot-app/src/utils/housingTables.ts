@@ -2,6 +2,7 @@ import type { IRegistryRowTone } from '../components/ui/registry/RegistryTable';
 import type {
   IApartmentResident,
   ICompanyApartment,
+  IDormitory,
   ICompensationMonthRow,
   IDormitoryResident,
   IDormitoryStay,
@@ -324,6 +325,40 @@ export const DORMITORY_HISTORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitory
     sortValue: resident => resident.comment ?? null,
   },
 ];
+
+/** Справочник общежитий (миграция 377) — как «Общежития» 1С: Дата, Номер, Общежитие, Стоимость места (справочно). */
+export const DORMITORY_DIRECTORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitory>> = [
+  dateColumn<IDormitory>('doc_date', 'Дата', dormitory => dormitory.doc_date),
+  {
+    key: 'doc_number',
+    label: 'Номер',
+    type: 'text',
+    width: 128,
+    nowrap: true,
+    text: dormitory => orDash(dormitory.doc_number),
+    sortValue: dormitory => dormitory.doc_number,
+  },
+  {
+    key: 'address',
+    label: 'Общежитие',
+    type: 'text',
+    text: dormitory => dormitory.address,
+    sortValue: dormitory => dormitory.address,
+  },
+  {
+    key: 'place_price',
+    label: 'Стоимость места',
+    type: 'money',
+    width: 168,
+    nowrap: true,
+    numeric: true,
+    text: dormitory => formatPayrollMoney(dormitory.place_price) ?? '—',
+    sortValue: dormitory => (dormitory.place_price === null ? null : Number(dormitory.place_price)),
+    exportValue: dormitory => dormitory.place_price,
+  },
+];
+
+export const buildDormitoryDirectoryExport = exportOf('Общежития', DORMITORY_DIRECTORY_COLUMNS);
 
 export const buildDormitoryResidentsExport = (title: string, withPlace: boolean) => exportOf(title, dormitoryResidentColumns(withPlace));
 export const buildDormitoryHistoryExport = (title: string) => exportOf(`${title} — история`, DORMITORY_HISTORY_COLUMNS);

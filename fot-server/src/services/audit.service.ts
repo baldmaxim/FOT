@@ -318,6 +318,10 @@ export const AUDIT_ACTIONS = {
   COMPANY_APARTMENT_ADDED: 'COMPANY_APARTMENT_ADDED',
   COMPANY_APARTMENT_UPDATED: 'COMPANY_APARTMENT_UPDATED',
   COMPANY_APARTMENT_DELETED: 'COMPANY_APARTMENT_DELETED',
+  // Справочник общежитий «Проживания» (миграция 377): общежитие — добавлено, изменено (было → стало), удалено.
+  DORMITORY_ADDED: 'DORMITORY_ADDED',
+  DORMITORY_UPDATED: 'DORMITORY_UPDATED',
+  DORMITORY_DELETED: 'DORMITORY_DELETED',
   // «Удержания» кадров (миграция 318): удержание сотрудника — добавлено, изменено (было → стало), удалено.
   STAFF_DEDUCTION_ADDED: 'STAFF_DEDUCTION_ADDED',
   STAFF_DEDUCTION_UPDATED: 'STAFF_DEDUCTION_UPDATED',

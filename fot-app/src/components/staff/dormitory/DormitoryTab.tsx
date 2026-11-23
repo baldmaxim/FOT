@@ -9,7 +9,7 @@ import {
   dormitoryService,
 } from '../../../services/dormitoryService';
 import { PAYROLL_TERMS_PREFIX } from '../../../services/payrollRegistryService';
-import { DORMITORY_PRESET_ADDRESSES, dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
+import { dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
 import { housingMonthOptions } from '../../../utils/housingTables';
 import { moscowTodayIso } from '../../../utils/moscowDate';
 import { MonthSelect } from '../../ui/MonthSelect';
@@ -64,7 +64,7 @@ export const DormitoryTab: FC = () => {
     setVisited(prev => (prev.has(next) ? prev : new Set([...prev, next])));
   };
 
-  // Подсказки общежитий: 9 общежитий компании и сохранённые адреса — нужны только окнам правки.
+  // Общежития справочника (миграция 377) — выбор общежития в окнах заселения, правки и переселения.
   const addressesQuery = useQuery({
     queryKey: DORMITORY_ADDRESSES_KEY,
     queryFn: ({ signal }) => dormitoryService.listAddresses(signal),
@@ -72,8 +72,7 @@ export const DormitoryTab: FC = () => {
     staleTime: 0,
   });
   const addresses = useMemo(
-    () => dormitoryAddressOptions([...DORMITORY_PRESET_ADDRESSES, ...(addressesQuery.data ?? [])])
-      .filter(address => !isFlatAddress(address)),
+    () => dormitoryAddressOptions(addressesQuery.data ?? []).filter(address => !isFlatAddress(address)),
     [addressesQuery.data],
   );
 

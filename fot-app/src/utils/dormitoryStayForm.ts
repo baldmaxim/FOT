@@ -31,19 +31,6 @@ export type DormitoryStayParse =
 
 export const DORMITORY_ADDRESS_MAX_LENGTH = 200;
 
-/** Общежития компании — в подсказках «Адрес / номер» всегда, даже без проживаний. */
-export const DORMITORY_PRESET_ADDRESSES: readonly string[] = [
-  'Общ. Мал.Почтовая 2\\2',
-  'Общ. Нагатинская 34',
-  'Общ. Верхнелихоборская 6',
-  'Общ. Свободы 35',
-  'Общ. Рязанский пр-кт 86/1с3',
-  'Общ. Боровское ш. 12А',
-  'Общ. База Мытищи',
-  'Общ. База Химки',
-  'Общ. г.Химки, ул.Рабочая д.2а',
-];
-
 /** Адрес так, как его сохранит сервер: пробелы схлопнуты, по краям обрезаны. */
 const normalizeAddress = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -79,7 +66,7 @@ export const parseDormitoryStay = (
   }
   const dates = { check_in: draft.checkIn, check_out: draft.checkOut || null };
   if (kind === 'dormitory') {
-    if (!address) return { ok: false, field: 'address', message: 'Укажите адрес или номер общежития' };
+    if (!address) return { ok: false, field: 'address', message: 'Выберите общежитие' };
     return { ok: true, payload: { ...dates, address, amount: null } };
   }
   if (draft.amount === undefined) return { ok: true, payload: { ...dates, address: address || null, amount: null } };
@@ -93,8 +80,8 @@ export const parseDormitoryStay = (
 };
 
 /**
- * Подсказки поля «Адрес / номер»: общежития компании и сохранённые адреса (миграция 319) без повторов (регистр и пробелы не в счёт,
- * из написаний — самое частое), по алфавиту, числа — по значению: «Общ2» раньше «Общ10».
+ * Список общежитий справочника для выбора (миграции 319, 377) без повторов (регистр и пробелы не в счёт, из написаний —
+ * самое частое), по алфавиту, числа — по значению: «Общ2» раньше «Общ10».
  */
 export const dormitoryAddressOptions = (addresses: readonly string[]): string[] => {
   const spellingsByKey = new Map<string, Map<string, number>>();
@@ -109,14 +96,4 @@ export const dormitoryAddressOptions = (addresses: readonly string[]): string[] 
   return [...spellingsByKey.values()]
     .map(spellings => [...spellings].reduce((best, next) => (next[1] > best[1] ? next : best))[0])
     .sort((a, b) => a.localeCompare(b, 'ru', { numeric: true, sensitivity: 'base' }));
-};
-
-/** Подсказки под введённым: пусто — все, иначе содержащие его; ровно введённый адрес не показываем. */
-export const filterDormitoryAddresses = (options: readonly string[], typed: string): string[] => {
-  const needle = normalizeAddress(typed).toLocaleLowerCase('ru');
-  if (!needle) return [...options];
-  return options.filter(option => {
-    const value = option.toLocaleLowerCase('ru');
-    return value !== needle && value.includes(needle);
-  });
 };

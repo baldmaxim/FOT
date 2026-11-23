@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { companyApartmentsController as apartments } from '../controllers/company-apartments.controller.js';
 import { dormitoryCompensationPauseController as pause } from '../controllers/dormitory-compensation-pause.controller.js';
+import { dormitoryDirectoryController as directory } from '../controllers/dormitory-directory.controller.js';
 import { dormitoryResidentsController as residents } from '../controllers/dormitory-residents.controller.js';
 import { dormitoryStaysController as c } from '../controllers/dormitory-stays.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
@@ -43,7 +44,12 @@ router.post('/apartments', dormitoryEdit, apartments.add);
 router.patch('/apartments/:id', dormitoryEdit, apartments.update);
 router.delete('/apartments/:id', dormitoryEdit, apartments.remove);
 router.get('/employees/search', dormitoryEdit, c.searchEmployees);
-// Подсказки «Адрес / номер» — только окну добавления и правки.
+// Названия общежитий справочника — выбор общежития в окнах заселения, правки и переселения.
 router.get('/addresses', dormitoryEdit, c.listAddresses);
+// Миграция 377: справочник общежитий («Общежитие» → «Справочник»).
+router.get('/dormitories', dormitoryView, directory.list);
+router.post('/dormitories', dormitoryEdit, directory.add);
+router.patch('/dormitories/:id', dormitoryEdit, directory.update);
+router.delete('/dormitories/:id', dormitoryEdit, directory.remove);
 
 export default router;

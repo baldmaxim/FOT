@@ -7,6 +7,7 @@ import {
   compensationTone,
   compensationTotals,
   dismissedTone,
+  DORMITORY_DIRECTORY_COLUMNS,
   DORMITORY_HISTORY_COLUMNS,
   formatPassTime,
   formatPeriod,
@@ -109,5 +110,22 @@ describe('«Проживание»: месяц и выгрузка (20.11.2026)'
     expect(DORMITORY_HISTORY_COLUMNS.map(column => column.label)).toEqual(
       ['Сотрудник', 'Подразделение', 'Общежитие', 'Дата въезда', 'Дата выезда', 'Комментарий'],
     );
+  });
+});
+
+describe('справочник общежитий (377)', () => {
+  const svobody = { id: 3, address: 'Общ. Свободы 35', doc_date: '2025-09-22', doc_number: '000000009', place_price: '550.00' };
+  const texts = (row: typeof svobody | { id: number; address: string; doc_date: null; doc_number: null; place_price: null }) => (
+    DORMITORY_DIRECTORY_COLUMNS.map(column => column.text(row))
+  );
+
+  it('столбцы как в 1С: Дата, Номер, Общежитие, Стоимость места; пустое — прочерк', () => {
+    expect(DORMITORY_DIRECTORY_COLUMNS.map(column => column.label)).toEqual(['Дата', 'Номер', 'Общежитие', 'Стоимость места']);
+    expect(texts(svobody)[0]).toBe('22.09.2025');
+    expect(texts(svobody)[1]).toBe('000000009');
+    expect(texts(svobody)[2]).toBe('Общ. Свободы 35');
+    expect(texts(svobody)[3]).toMatch(/^550,00/);
+    expect(texts({ id: 1, address: 'Общ. База Мытищи', doc_date: null, doc_number: null, place_price: null }))
+      .toEqual(['—', '—', 'Общ. База Мытищи', '—']);
   });
 });

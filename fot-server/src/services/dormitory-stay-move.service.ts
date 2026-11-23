@@ -14,6 +14,7 @@
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../config/postgres.js';
+import { resolveDormitoryName } from './dormitory-directory.service.js';
 import { getStay, type IDormitoryStay } from './dormitory-stays.service.js';
 import { hasPgCode } from './payroll/payroll-pg-errors.js';
 import { lockPayrollEmployee } from './payroll/payroll-terms.service.js';
@@ -31,6 +32,8 @@ export type StayMoveFailure =
   | 'not_movable'
   /** Квартиры нет. */
   | 'apartment_not_found'
+  /** Общежития нет в справочнике (миграция 377). */
+  | 'not_in_directory'
   /** Сотрудник уже живёт там же. */
   | 'same_place'
   /** Дата не позже въезда. */
@@ -47,9 +50,12 @@ interface IPlace {
   address: string;
 }
 
-/** Адрес и ссылка новой записи: у квартиры — копия «Кв. <адрес>». */
-const resolvePlace = async (client: PoolClient, target: StayMoveTarget): Promise<IPlace | null> => {
-  if ('address' in target) return { apartment_id: null, address: target.address };
+/** Адрес и ссылка новой записи: у общежития — название справочника, у квартиры — копия «Кв. <адрес>». */
+const resolvePlace = async (client: PoolClient, target: StayMoveTarget): Promise<IPlace | 'not_in_directory' | null> => {
+  if ('address' in target) {
+    const name = await resolveDormitoryName(client, target.address);
+    return name === null ? 'not_in_directory' : { apartment_id: null, address: name };
+  }
   const row = (await client.query<{ id: number; address: string }>(
     `SELECT id, address FROM company_apartments WHERE id = $1 FOR SHARE`,
     [target.apartmentId],
@@ -99,6 +105,7 @@ export const moveStay = async (
       if (!current) return 'not_found';
       if (current.kind !== 'dormitory') return 'not_movable';
       const place = await resolvePlace(client, target);
+      if (place === 'not_in_directory') return place;
       if (!place) return 'apartment_not_found';
 
       // Повтор: прежняя закрыта этой датой, следующая — с этой даты в том же месте.
@@ -123,9 +130,6 @@ export const moveStay = async (
          VALUES ($1, 'dormitory', $2::date, $3::date, $4, NULL, $5, false, $6) RETURNING id`,
         [current.employee_id, date, current.check_out, place.address, place.apartment_id, comment ?? current.comment],
       )).rows[0];
-      if (place.apartment_id === null) {
-        await client.query(`INSERT INTO dormitory_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING`, [place.address]);
-      }
       return { closedId: current.id, openedId: opened.id, repeated: false };
     });
     if (typeof ids === 'string') return ids;

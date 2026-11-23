@@ -2,20 +2,19 @@ import { useId, useState, type FC } from 'react';
 
 import { ApiError } from '../../../api/client';
 import { dormitoryService, type ICompanyApartment, type IDormitoryStay } from '../../../services/dormitoryService';
-import { DORMITORY_ADDRESS_MAX_LENGTH } from '../../../utils/dormitoryStayForm';
 import { ClearableInput } from '../../ui/ClearableInput';
 import { formatDate } from '../../../utils/formatMoney';
 import { apartmentTitle } from '../../../utils/housingTables';
 import { DateInput } from '../../ui/DateInput';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
-import { DormitoryAddressField } from './DormitoryAddressField';
+import { DormitorySelect } from './DormitorySelect';
 
 type Target = 'dormitory' | 'flat';
 
 interface IStayMoveModalProps {
   stay: IDormitoryStay;
-  /** Подсказки адресов общежитий. */
+  /** Названия общежитий справочника (миграция 377). */
   addresses: readonly string[];
   apartments: readonly ICompanyApartment[];
   /** false — только в другое общежитие (вкладка «Общежитие»): выбора «Квартира» нет. */
@@ -61,7 +60,7 @@ export const StayMoveModal: FC<IStayMoveModalProps> = ({
     }
     if (date <= stay.check_in) { setError('Дата переселения должна быть позже даты въезда'); return; }
     const trimmed = address.replace(/\s+/g, ' ').trim();
-    if (target === 'dormitory' && !trimmed) { setError('Укажите общежитие'); return; }
+    if (target === 'dormitory' && !trimmed) { setError('Выберите общежитие'); return; }
     if (target === 'flat' && flatId === null) { setError('Выберите квартиру'); return; }
     setSaving(true);
     setError(null);
@@ -132,15 +131,14 @@ export const StayMoveModal: FC<IStayMoveModalProps> = ({
       {target === 'dormitory' ? (
         <div className={styles.field}>
           <label htmlFor={addressId} className={styles.label}>Общежитие</label>
-          <DormitoryAddressField
+          <DormitorySelect
             id={addressId}
             options={addresses}
             value={address}
-            onValueChange={value => { setAddress(value); setError(null); }}
-            maxLength={DORMITORY_ADDRESS_MAX_LENGTH}
+            onChange={value => { setAddress(value); setError(null); }}
             disabled={saving}
-            aria-describedby={error ? errorId : undefined}
-            clearLabel="Очистить общежитие"
+            describedBy={error ? errorId : undefined}
+            exclude={stay.apartment_id ? null : stay.address}
           />
         </div>
       ) : (
