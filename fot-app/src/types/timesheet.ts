@@ -192,6 +192,8 @@ export interface TimesheetEmployee {
   /** Имя отдела/бригады сотрудника — для деления строк по отделу в фильтре табеля. */
   department_name?: string | null;
   employment_status: 'active' | 'fired';
+  /** Дата увольнения (YYYY-MM-DD), у уволенных. */
+  dismissal_date?: string | null;
   /** Дата (включительно), с которой сотрудник скрыт по «Исключить» — после неё дни рендерятся как inactive. */
   excluded_from_timesheet_date?: string | null;
   /** Дата (включительно), с которой сотрудник переведён в другой отдел — после неё дни рендерятся как inactive с бейджем «Переведён». */

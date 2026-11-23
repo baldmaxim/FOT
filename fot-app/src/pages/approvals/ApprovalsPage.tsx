@@ -670,8 +670,10 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   const gridEmployees = useMemo(
     () => sortTimesheetRows(tsQuery.data?.employees ?? [], {
       departmentId: isPersonal ? null : (row.department_id ?? null),
+      departmentName: isPersonal ? null : (row.department_name ?? null),
+      periodEnd: monthBounds?.lastDate ?? null,
     }),
-    [tsQuery.data?.employees, isPersonal, row.department_id],
+    [tsQuery.data?.employees, isPersonal, row.department_id, row.department_name, monthBounds],
   );
 
   const outOfPeriodDates = useMemo(() => {

@@ -630,8 +630,9 @@ export const TimesheetPage: FC = () => {
     // Группировка строк по секциям — utils/timesheetRowOrder: переведённые и уволенные — под своими.
     return sortTimesheetRows(deferredTimesheetData?.employees || [], {
       departmentId: activeGridDeptId === DIRECT_REPORTS_DEPT ? null : activeGridDeptId,
+      periodEnd: rangeEnd,
     });
-  }, [deferredTimesheetData, isEmployeeMode, employeeModeData, activeGridDeptId]);
+  }, [deferredTimesheetData, isEmployeeMode, employeeModeData, activeGridDeptId, rangeEnd]);
   const canBulkEdit = canUseBulkCorrections({
     canWriteActiveDept,
     canEditTimesheet,
@@ -716,7 +717,11 @@ export const TimesheetPage: FC = () => {
   const salaryObjectsGridData = useMemo(() => (
     viewMode === 'salary_objects' && liveTimesheetData
       ? {
-        employees: sortTimesheetRows(liveTimesheetData.employees || []),
+        // Порядок и блоки — как в «По сотрудникам» (та же бригада и тот же период).
+        employees: sortTimesheetRows(liveTimesheetData.employees || [], {
+          departmentId: activeGridDeptId === DIRECT_REPORTS_DEPT ? null : activeGridDeptId,
+          periodEnd: rangeEnd,
+        }),
         entries: liveTimesheetData.entries || [],
         objectEntries: liveTimesheetData.object_entries || [],
         employeeStats: liveTimesheetData.employee_stats || [],
@@ -725,7 +730,7 @@ export const TimesheetPage: FC = () => {
         calendar: liveTimesheetData.calendar || null,
       }
       : null
-  ), [viewMode, liveTimesheetData]);
+  ), [viewMode, liveTimesheetData, activeGridDeptId, rangeEnd]);
   // Замки закрытого табеля приходят интервалами по сотруднику: в смешанной выборке
   // (табельщица, прямые подчинённые) плоский список дат блокировал бы чужих. Приоритет
   // статуса разрешён на сервере, здесь только поиск. Админ не блокируется — сервер

@@ -68,8 +68,12 @@ export const DepartmentTimesheetModal: FC<IDepartmentTimesheetModalProps> = ({
   });
   // Порядок строк как в табеле: свои → переведённые → уволенные.
   const gridEmployees = useMemo(
-    () => sortTimesheetRows(tsQuery.data?.employees ?? [], { departmentId: departmentId ?? null }),
-    [tsQuery.data?.employees, departmentId],
+    () => sortTimesheetRows(tsQuery.data?.employees ?? [], {
+      departmentId: departmentId ?? null,
+      departmentName,
+      periodEnd: monthBounds?.lastDate ?? null,
+    }),
+    [tsQuery.data?.employees, departmentId, departmentName, monthBounds],
   );
 
   const [dayModal, setDayModal] = useState<{
