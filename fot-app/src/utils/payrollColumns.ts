@@ -65,6 +65,8 @@ export const PAYROLL_CALC_TABLE_COLUMNS: PayrollTableColumns = [
 /** Ключи хранилища: у «Условий оплаты» и «Расчётов» скрытые столбцы свои. */
 export const PAYROLL_TERMS_COLUMNS_KEY = 'fot:payroll-terms:hidden-columns';
 export const PAYROLL_CALC_COLUMNS_KEY = 'fot:payroll-calc:hidden-columns';
+/** Ширины столбцов «Расчётов», заданные пользователем (useColumnWidths, свой префикс хранилища). */
+export const PAYROLL_CALC_WIDTHS_KEY = 'payroll.calc';
 
 /** Все известные столбцы по порядку: «Условия оплаты», затем свои столбцы «Расчётов». */
 const ALL_COLUMN_KEYS: PayrollTableColumn[] = [

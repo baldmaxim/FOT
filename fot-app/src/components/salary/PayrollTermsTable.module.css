@@ -425,3 +425,32 @@
   .colCalcGroup { width: 188px; }
   .stickyName { left: 44px; }
 }
+
+/*
+ * Ширина столбцов «Расчётов» как в Excel (useColumnResize). С первой правки таблица «точная»: по CSS 2.1 §17.5.2.1 у
+ * fixed-таблицы ширина = большее из width и суммы столбцов, при width: 0 — ровно сумма, без растяжки на весь экран.
+ */
+.table.tableExact { width: 0; }
+
+/* Двойной клик — ширина «по тексту»: скрытая копия таблицы вне экрана, авто-раскладка, текст в одну строку. */
+.measureHost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.table.measuring {
+  table-layout: auto !important;
+  width: max-content !important;
+}
+.table.measuring th,
+.table.measuring td {
+  position: static !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  white-space: nowrap !important;
+}
+.table.measuring th *,
+.table.measuring td * { white-space: nowrap !important; }

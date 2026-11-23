@@ -32,6 +32,7 @@ import {
 } from '../../utils/payrollColumnFilters';
 import {
   isSortablePayrollColumn,
+  PAYROLL_CALC_WIDTHS_KEY,
   PAYROLL_TERMS_COLUMNS_KEY,
   PAYROLL_TERMS_TABLE_COLUMNS,
   type PayrollTableColumn,
@@ -444,6 +445,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             // Список «Не посчитано» — фильтром «Суммы»: у скрытого столбца фильтр не действует, подпись не нажимается.
             onShowUncounted={isCalcScreen && !tableHiddenColumns.has('calc_net') ? amountState.showUncounted : undefined}
             onHideUncounted={uncountedShown ? amountState.hideUncounted : undefined}
+            columnWidthsKey={isCalcScreen ? PAYROLL_CALC_WIDTHS_KEY : undefined}
           />
           <div className={styles.footer}>
             {isFetchNextPageError ? (

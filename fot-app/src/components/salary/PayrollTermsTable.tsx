@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Minus, Plus } from 'lucide-react';
 
@@ -9,14 +9,9 @@ import {
   type PayrollSortDir,
   type PayrollSortKey,
 } from '../../services/payrollService';
+import { useColumnResize } from '../../hooks/useColumnResize';
 import { usePayrollAccrualsColumnWidth } from '../../hooks/usePayrollAccrualsColumnWidth';
-import {
-  accrualLines,
-  accrualsByMonthParts,
-  formatAccrualPeriodLong,
-  formatAccrualPeriodShort,
-  type IAccrualMonthPart,
-} from '../../utils/payrollAccruals';
+import { formatAccrualPeriodLong, formatAccrualPeriodShort } from '../../utils/payrollAccruals';
 import { isCalcColumn, PAYROLL_CALC_HEADER_TITLES } from '../../utils/payrollCalcColumns';
 import { payrollTotalState, type IPayrollTotalsStatus } from '../../utils/payrollCalcTotals';
 import { countPayrollAmountFilters, isPayrollAmountViewColumn } from '../../utils/payrollCalcView';
@@ -41,7 +36,9 @@ import {
   type PayrollSubColumn,
 } from '../../utils/payrollSubColumns';
 import { isColumnFiltered, type ITableView } from '../../utils/tableView';
+import { ColumnResizeHandle } from '../ui/ColumnResizeHandle';
 import { TableSortHeader } from '../ui/TableSortHeader';
+import { PayrollAccrualsText } from './PayrollAccrualsText';
 import { PayrollCalcCell } from './PayrollCalcCell';
 import { PayrollSortHeader } from './PayrollSortHeader';
 import { PayrollSubColumnCell } from './PayrollSubColumnCell';
@@ -86,41 +83,17 @@ interface IPayrollTermsTableProps {
   onShowUncounted?: () => void;
   /** В таблице только «не посчитанные»: в «Итого» — «←» назад ко всем (подвал есть и при 0 строк). */
   onHideUncounted?: () => void;
+  /** Передан — ширина столбцов меняется, как в Excel («Расчёты»), и запоминается по этому ключу. */
+  columnWidthsKey?: string;
 }
 
 /** Оценка до измерения: строка в одну линию ≈ 36px, переносы подразделения/должности — выше. */
 const ROW_ESTIMATE = 44;
 /** Всегда видимые столбцы: «№», «Сотрудник» (и чекбокс, если есть). */
 const FIXED_COLUMN_COUNT = 2;
+/** Ключ столбца «Сотрудник» в ширинах пользователя. */
+const NAME_COLUMN_KEY = 'name';
 const NO_EXPANDED: ReadonlySet<PayrollExpandableColumn> = new Set();
-
-const renderAccrualLine = (line: IAccrualMonthPart[]): ReactNode => line.map(({ month, name, amount, pending }, index) => (
-  <Fragment key={month}>
-    {index > 0 && <span className={styles.accrualSep}>; </span>}
-    <span className={styles.accrualMonth}>{name}</span>
-    {amount === null
-      ? (pending ? '\u00a0…' : '\u00a0—')
-      : <>:{'\u00a0'}<span className={styles.accrualAmount}>{amount}</span></>}
-  </Fragment>
-));
-
-/**
- * «Выплачено»: месяцы курсивом, суммы крупнее; две строки поровну (3 + 3), между месяцем и суммой NBSP.
- * Ширину содержимого считает usePayrollAccrualsColumnWidth — разметку менять вместе с accrualsCellWidth («…» там
- * меряется как «—», ширина почти та же). Пока расчёт ФОТ порции идёт — суммы 1С списка, месяц без суммы — «…».
- */
-const renderAccruals = (months: string[], row: IPayrollTermsRow): ReactNode => {
-  const pending = row.payouts_status === 'pending';
-  const parts = accrualsByMonthParts(months, row.payouts, pending);
-  if (parts === null) return pending ? '…' : '—';
-  const [first, second] = accrualLines(parts);
-  return (
-    <span className={styles.accruals}>
-      {renderAccrualLine(first)}
-      {second.length > 0 && <>;<br />{renderAccrualLine(second)}</>}
-    </span>
-  );
-};
 
 /**
  * Таблица условий оплаты в стиле «Управления кадрами»: фиксированные колонки с переносом,
@@ -149,6 +122,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onOpenAmountFilter,
   onShowUncounted,
   onHideUncounted,
+  columnWidthsKey,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const accrualPeriodShort = useMemo(() => formatAccrualPeriodShort(accrualMonths), [accrualMonths]);
@@ -195,6 +169,18 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     [columns, hiddenColumns, expandedColumns, subColumns],
   );
   const columnCount = FIXED_COLUMN_COUNT + tableColumns.length;
+  const columnKeys = useMemo(() => [NAME_COLUMN_KEY, ...tableColumns.map(entry => entry.key)], [tableColumns]);
+  const columnResize = useColumnResize({
+    storageKey: columnWidthsKey,
+    columnKeys,
+    measuringClass: styles.measuring,
+    measureHostClass: styles.measureHost,
+  });
+  /** Ручка ширины у простого заголовка (у TableSortHeader и PayrollSortHeader — проп resize). */
+  const resizeHandle = (key: string, label: string): ReactNode => {
+    const resize = columnResize.resizeOf(key);
+    return resize ? <ColumnResizeHandle label={label} resize={resize} /> : null;
+  };
   // Группы «+» как в Excel: итог с «+» темнее, у раскрытой — скобка над шапкой и линии; классы по ключу столбца.
   const withPlus = useMemo(
     () => new Set([...subColumns].filter(([, subs]) => subs.length > 0).map(([key]) => key)),
@@ -213,6 +199,11 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     }));
   }, [tableColumns, withPlus]);
   const groupCellClass = useCallback((key: string) => groupClasses.get(key)?.cell, [groupClasses]);
+  /** Ширина столбца, заданная пользователем; нет — ширина класса. */
+  const widthStyle = (key: string): { width: string } | undefined => {
+    const width = columnResize.widths[key];
+    return width === undefined ? undefined : { width: `${width}px` };
+  };
 
   const renderSortHeader = (key: PayrollSortKey, label: string, className?: string) => (
     <PayrollSortHeader
@@ -225,6 +216,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       onSort={onSort}
       onOpenFilter={onOpenFilter}
       filterActive={isPayrollColumnFilterActive(columnFilters, key)}
+      resize={columnResize.resizeOf(key)}
     />
   );
 
@@ -276,6 +268,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         filterActive={isColumnFiltered(view, column.key)}
         disabled={!ready}
         extra={toggle ? <span className={styles.headExtra}>{toggle}</span> : undefined}
+        resize={columnResize.resizeOf(column.key)}
       >
         {paidPeriod && column.key !== 'calc_rate' && (
           <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
@@ -294,6 +287,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         <th key={column.key} title={`Выплачено за последние полгода (начислено − удержано), ₽: ${accrualPeriodLong}`}>
           Выплачено, ₽
           <span className={styles.headPeriod}>{accrualPeriodShort}</span>
+          {resizeHandle(column.key, 'Выплачено, ₽')}
         </th>
       );
     }
@@ -305,6 +299,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         {paidPeriod && column.key !== 'calc_rate' && (
           <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>
         )}
+        {resizeHandle(column.key, column.label)}
       </th>
     );
   };
@@ -332,6 +327,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
     <th key={key} className={cx(styles.subHead, groupClasses.get(key)?.head)} title={sub.type === 'column' ? PAYROLL_CALC_HEADER_TITLES[sub.column] : undefined}>
       {sub.label}
       {paidPeriod && <span className={`${styles.headPeriod} ${styles.headPeriodWrap}`}>{paidPeriod}</span>}
+      {resizeHandle(key, sub.label)}
     </th>
   );
 
@@ -362,7 +358,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
         // Ставка квартиры — за день (миграция 339).
         return <td key={column} className={styles.cellNumber}>{formatMonthly(row, row.housing_compensation, '₽/день')}</td>;
       case 'accruals':
-        return <td key={column} className={styles.cellAccruals}>{renderAccruals(accrualMonths, row)}</td>;
+        return <td key={column} className={styles.cellAccruals}><PayrollAccrualsText months={accrualMonths} row={row} /></td>;
       case 'deductions': {
         const total = row.paid_deductions_total;
         return renderPaidCell(column, row, 'deducted', total, total !== null && total !== undefined && (row.paid_deductions?.length ?? 0) > 0);
@@ -375,15 +371,16 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
 
   return (
     <div className={cx(styles.wrap, totalsStatus && styles.wrapTotals)} ref={scrollRef}>
-      <table className={styles.table}>
+      <table className={cx(styles.table, columnResize.exact && styles.tableExact)}>
         <colgroup>
           <col className={styles.colNum} />
-          <col className={styles.colName} />
+          <col className={styles.colName} data-col-key={NAME_COLUMN_KEY} style={widthStyle(NAME_COLUMN_KEY)} />
           {tableColumns.map(entry => (
             <col
               key={entry.key}
               className={styles[colClassOf(entry)]}
-              style={entry.key === 'accruals' ? { width: accrualsWidth } : undefined}
+              data-col-key={entry.key}
+              style={widthStyle(entry.key) ?? (entry.key === 'accruals' ? { width: accrualsWidth } : undefined)}
             />
           ))}
         </colgroup>

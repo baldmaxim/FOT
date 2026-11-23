@@ -2,6 +2,7 @@ import { memo, type FC, type MouseEvent } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from 'lucide-react';
 
 import type { PayrollSortDir, PayrollSortKey } from '../../services/payrollService';
+import { ColumnResizeHandle, type IColumnResize } from '../ui/ColumnResizeHandle';
 import styles from './PayrollSortHeader.module.css';
 
 interface IPayrollSortHeaderProps {
@@ -15,6 +16,8 @@ interface IPayrollSortHeaderProps {
   onOpenFilter: (key: PayrollSortKey, anchor: HTMLElement) => void;
   filterActive: boolean;
   className?: string;
+  /** Передана — у правого края ручка ширины, как в Excel («Расчёты»); th позиционирован (sticky). */
+  resize?: IColumnResize;
 }
 
 /**
@@ -22,7 +25,7 @@ interface IPayrollSortHeaderProps {
  * меняет направление, другой столбец — по возрастанию) и воронка фильтра столбца.
  */
 export const PayrollSortHeader: FC<IPayrollSortHeaderProps> = memo(({
-  sortKey, label, activeKey, dir, onSort, onOpenFilter, filterActive, className,
+  sortKey, label, activeKey, dir, onSort, onOpenFilter, filterActive, className, resize,
 }) => {
   const active = sortKey === activeKey;
   const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
@@ -57,6 +60,7 @@ export const PayrollSortHeader: FC<IPayrollSortHeaderProps> = memo(({
           <Filter size={11} aria-hidden="true" />
         </button>
       </span>
+      {resize && <ColumnResizeHandle label={label} resize={resize} />}
     </th>
   );
 });

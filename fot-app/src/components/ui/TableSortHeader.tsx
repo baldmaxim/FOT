@@ -1,6 +1,7 @@
-import type { KeyboardEvent, MouseEvent, PointerEvent, ReactElement, ReactNode } from 'react';
+import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from 'lucide-react';
 
+import { ColumnResizeHandle, type IColumnResize } from './ColumnResizeHandle';
 import styles from './TableSortHeader.module.css';
 
 interface ITableSortHeaderProps<K extends string> {
@@ -25,11 +26,7 @@ interface ITableSortHeaderProps<K extends string> {
    * Передан — у правого края заголовка ручка ширины, как в Excel: тянуть мышью, двойной клик — по самому длинному
    * тексту; с клавиатуры — ← / → (шаг) и Enter (по тексту). th должен быть позиционирован (relative или sticky).
    */
-  resize?: {
-    onPointerDown: (event: PointerEvent<HTMLSpanElement>) => void;
-    onAutoFit: () => void;
-    onStep: (delta: -1 | 1) => void;
-  };
+  resize?: IColumnResize;
 }
 
 /**
@@ -48,17 +45,6 @@ export const TableSortHeader = <K extends string>({
   const handleFilter = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     onOpenFilter(sortKey, event.currentTarget);
-  };
-
-  const handleResizeKey = (event: KeyboardEvent<HTMLSpanElement>) => {
-    if (!resize) return;
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      event.preventDefault();
-      resize.onStep(event.key === 'ArrowLeft' ? -1 : 1);
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      resize.onAutoFit();
-    }
   };
 
   return (
@@ -88,20 +74,7 @@ export const TableSortHeader = <K extends string>({
         {extra}
       </span>
       {children}
-      {resize && (
-        <span
-          className={styles.resizeHandle}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={`Ширина столбца «${label}»: тянуть мышью, двойной клик — по тексту`}
-          title="Ширина столбца: тянуть, двойной клик — по тексту"
-          tabIndex={0}
-          onPointerDown={resize.onPointerDown}
-          onDoubleClick={resize.onAutoFit}
-          onClick={event => event.stopPropagation()}
-          onKeyDown={handleResizeKey}
-        />
-      )}
+      {resize && <ColumnResizeHandle label={label} resize={resize} />}
     </th>
   );
 };
