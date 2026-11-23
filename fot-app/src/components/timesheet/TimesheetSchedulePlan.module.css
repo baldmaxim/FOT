@@ -150,8 +150,9 @@
   background: var(--bg-tertiary);
 }
 
-.rowSelected .totalCell {
-  background: var(--accent-muted);
+/* Непрозрачный фон под акцентом: на компьютере итоги закреплены справа, под ними не должны просвечивать дни. */
+.table .rowSelected .totalCell {
+  background: linear-gradient(var(--accent-muted), var(--accent-muted)), var(--surface);
   color: var(--accent);
 }
 
@@ -194,5 +195,54 @@
 
   .dayHead {
     min-width: 30px;
+  }
+}
+
+/*
+ * Компьютер: дни графика — под теми же днями сетки табеля «По сотруднику». Сетка растягивается на ширину экрана, поэтому
+ * ширины столбцов график берёт из её замера (useTimesheetGridGeometry → <colgroup>, .tableAligned: fixed, ширина —
+ * ровно сумма столбцов). До замера — числа сетки без растяжки: «Сотрудник» 184px, день 42px, итог 64px.
+ * Итоги закреплены справа, как «Дни / Часы / Откл.». С 769px: на 768 и уже табель — карточки (useIsMobile(768)).
+ */
+@media (min-width: 769px) {
+  .table .monthCell {
+    width: 184px;
+    min-width: 184px;
+    max-width: 184px;
+  }
+
+  .dayHead {
+    width: 42px;
+    min-width: 42px;
+  }
+
+  .table .totalCell {
+    position: sticky;
+    z-index: 1;
+    min-width: 64px;
+    background: var(--surface);
+  }
+
+  .table thead .totalCell {
+    background: var(--bg-secondary);
+  }
+
+  .table .stick0 { right: 0; }
+  .table .stick1 { right: var(--plan-stick1, 64px); }
+  .table .stick2 { right: var(--plan-stick2, 128px); }
+
+  /* По CSS 2.1 §17.5.2.1 ширина fixed-таблицы — большее из width и суммы столбцов: при width: 0 — ровно сумма. */
+  .table.tableAligned {
+    table-layout: fixed;
+    width: 0;
+  }
+
+  /* Левая граница закреплённых итогов — как у «Месяца» справа. */
+  .table .totalEdge {
+    box-shadow: -1px 0 0 var(--border);
+  }
+
+  .table .rowSelected .totalEdge {
+    box-shadow: -1px 0 0 var(--border), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
   }
 }

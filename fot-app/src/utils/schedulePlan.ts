@@ -41,3 +41,22 @@ export const formatPlanDayTooltip = (year: number, month: number, day: ISchedule
 };
 
 export const daysInPlanMonth = (year: number, month: number): number => new Date(year, month, 0).getDate();
+
+/** В графике самый длинный месяц — 31 день. */
+export const PLAN_MAX_DAY = 31;
+
+/**
+ * Дни графика под табелем — те же, что у сетки табеля (`visibleDays`: «1–15», «16–конец», «Весь месяц»), день в день.
+ * Период кончается последним днём месяца табеля — график идёт до 31-го: у других месяцев года он есть. Пусто — 1–31.
+ */
+export const schedulePlanDayNumbers = (visibleDays: readonly number[], monthDays: number): number[] => {
+  const first = visibleDays.length > 0 ? Math.max(1, visibleDays[0]) : 1;
+  const last = visibleDays.length > 0 ? visibleDays[visibleDays.length - 1] : PLAN_MAX_DAY;
+  const end = last >= monthDays ? PLAN_MAX_DAY : Math.min(last, PLAN_MAX_DAY);
+  return Array.from({ length: Math.max(0, end - first + 1) }, (_, index) => first + index);
+};
+
+/** Квота «Сб / Вс» одним столбцом: «2 / 1»; обе нулевые — пусто. */
+export const formatPlanWeekendQuota = (saturdays: number, sundays: number): string => (
+  saturdays > 0 || sundays > 0 ? `${saturdays} / ${sundays}` : ''
+);

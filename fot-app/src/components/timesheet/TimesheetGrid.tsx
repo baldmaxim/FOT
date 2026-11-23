@@ -113,6 +113,8 @@ export interface ITimesheetGridProps {
   employeeBadge?: (employeeId: number) => ReadonlyArray<ITimesheetGridBadge>;
   /** Клик по ФИО ничего не открывает: без кнопки «Детализация» и подсветки. */
   hideEmployeeDetails?: boolean;
+  /** Блок горизонтальной прокрутки таблицы (null — снят): «По сотруднику» прокручивает с ним «График работы». */
+  onTableScrollElement?: (element: HTMLDivElement | null) => void;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
   onBulkBlockedSelectionAttempt?: (reason: BulkBlockReason) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
@@ -541,6 +543,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   problemTitle,
   employeeBadge,
   hideEmployeeDetails = false,
+  onTableScrollElement,
   onBulkSelectionChange,
   onBulkBlockedSelectionAttempt,
   onEmployeeClick,
@@ -825,6 +828,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   // большой отдел (сотни сотрудников × дни) фризит main-thread при смене отдела.
   // measureElement на <tbody> учитывает реальную высоту группы (вкл. раскрытые объекты).
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  // Свой ref — виртуализатору, тот же элемент — наружу (onTableScrollElement).
+  const setTableScrollElement = useCallback((element: HTMLDivElement | null) => {
+    tableScrollRef.current = element;
+    onTableScrollElement?.(element);
+  }, [onTableScrollElement]);
   const hasTimesheetObjectLine = useMemo(
     () => employees.some(employee => Boolean(employee.timesheet_object_label)),
     [employees],
@@ -1565,7 +1573,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           {tableLegend}
         </div>
 
-        <div className="ts-table-scroll">
+        <div className="ts-table-scroll" ref={onTableScrollElement}>
           <table className={`ts-table ts-table--objects${bulkEditMode ? ' ts-table--bulk-mode' : ''}${objectsSalary ? ' ts-table--salary-objects' : ''}${viewOnly ? ' ts-table--readonly' : ''}`}>
             <thead>
               <tr>
@@ -1582,7 +1590,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   if (today) cls = 'ts-th--today';
                   else if (weekend) cls = 'ts-th--weekend';
                   return (
-                    <th key={day} className={cls}>
+                    <th key={day} className={cls} data-day={day}>
                       {day}<br />
                       <span style={{ fontWeight: 400 }}>{getWeekdayShort(year, month, day)}</span>
                     </th>
@@ -1762,7 +1770,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         {headerActions}
       </div>
 
-      <div className="ts-table-scroll" ref={tableScrollRef}>
+      <div className="ts-table-scroll" ref={setTableScrollElement}>
         <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${viewOnly ? ' ts-table--readonly' : ''}`}>
           <thead>
             <tr>
@@ -1774,7 +1782,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 if (today) cls = 'ts-th--today';
                 else if (weekend) cls = 'ts-th--weekend';
                 return (
-                  <th key={day} className={cls}>
+                  <th key={day} className={cls} data-day={day}>
                     {day}<br />
                     <span style={{ fontWeight: 400 }}>{getWeekdayShort(year, month, day)}</span>
                   </th>

@@ -262,6 +262,8 @@ export const TimesheetPage: FC = () => {
   const { year, month } = useMemo(() => fromMonthIndex(resolvedMonthIndex), [resolvedMonthIndex]);
 
   const isMobile = useIsMobile(768);
+  // «По сотруднику»: прокрутка сетки табеля — «График работы» под ней прокручивается с ней, день под днём.
+  const [employeeGridScroll, setEmployeeGridScroll] = useState<HTMLDivElement | null>(null);
   const [mobileApprovalOpen, setMobileApprovalOpen] = useState(false);
   const mobileApprovalVisible = isMobile && mobileApprovalOpen;
 
@@ -3016,8 +3018,14 @@ export const TimesheetPage: FC = () => {
               onEmployeeClick={handleEmployeeClick}
               onDayClick={handleDayClick}
               onObjectDayClick={handleObjectDayClick}
+              onTableScrollElement={setEmployeeGridScroll}
             />
-            <TimesheetSchedulePlan employeeId={selectedEmployeeModeId} month={monthStr} />
+            <TimesheetSchedulePlan
+              employeeId={selectedEmployeeModeId}
+              month={monthStr}
+              visibleDays={visibleDays}
+              syncScrollWith={employeeGridScroll}
+            />
           </div>
         )
       ) : isAssignedMode ? (
