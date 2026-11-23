@@ -77,7 +77,11 @@ vi.mock('./timesheet-export-mode.service.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./timesheet-export-mode.service.js')>();
   return {
     ...actual,
-    resolveExportModes: vi.fn(async (ids: number[]) => new Map(ids.map(id => [id, actual.DEFAULT_EXPORT_MODE]))),
+    // 2 — закреплённый объект «ЖК Ситибэй», 6 — «Офис» по отделу (legacy), остальные — по СКУД.
+    resolveExportModes: vi.fn(async (ids: number[]) => new Map(ids.map(id => [id,
+      id === 2 ? { mode: 'object', pinnedObjectId: OBJ_A, source: 'employee_explicit' }
+        : id === 6 ? { mode: 'current_activity', pinnedObjectId: null, source: 'legacy_department' }
+          : actual.DEFAULT_EXPORT_MODE]))),
   };
 });
 
@@ -306,5 +310,75 @@ describe.skipIf(!PG_URL)('staff-month-1c — снимок месяца на Post
     for (const object of snapshot.objects) expect(cents(object.hours)).toBe(byObject.get(object.object.key) ?? 0);
     expect(brigade.objects.reduce((sum, part) => sum + cents(part.hours), 0))
       .toBe(brigade.members.reduce((sum, member) => sum + cents(member.hours), 0));
+  });
+
+  it('половины: состав, объект и отдел половины, бригада, норма, суммы половин = месяц, объект табелирования', async () => {
+    live.onFetch = null;
+    const now = new Date('2026-11-19T10:00:00Z');
+    const snapshot = await withReadOnlySnapshot(client => buildStaffMonthSnapshot(client, monthBoundsOf('2026-10', now), now));
+    const [first, second] = [snapshot.halves[1], snapshot.halves[2]];
+    expect(first.bounds).toMatchObject({ from: '2026-10-01', to: '2026-10-15', started: true, ended: true });
+    expect(second.bounds).toMatchObject({ from: '2026-10-16', to: '2026-10-31', started: true, ended: true });
+    const rowOf = (view: typeof first, id: number) => view.rows.find(item => item.employee_id === id);
+
+    // Состав: в половине — у кого есть день табеля в её границах.
+    expect(first.rows.map(item => item.employee_id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(second.rows.map(item => item.employee_id)).toEqual([1]);
+
+    // 1: 1–15 — «ЖК Ситибэй» (10 ч работы + отпуск по графику), 16–31 — «ЖК Примавера К14» 8 ч; отдел — подача половины.
+    expect(rowOf(first, 1)).toMatchObject({ hours: 10, object: { key: OBJ_A }, object_source: 'hours', department: { id: D1 } });
+    expect(rowOf(second, 1)).toMatchObject({ hours: 8, object: { key: OBJ_B }, object_source: 'hours', department: { id: D1 } });
+    expect(rowOf(second, 1)!.days.map(day => day.date)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `2026-10-${String(16 + index).padStart(2, '0')}`));
+    // Дни половины — те же объекты, что в строке месяца (без копий).
+    const monthRow = snapshot.rows.find(item => item.employee_id === 1)!;
+    expect(rowOf(second, 1)!.days[0]).toBe(monthRow.days[15]);
+
+    // Готовность: 3 и 5 — живые дни прошлого месяца без закрытой подачи; 7 — уволен в месяце, окончательно.
+    expect(rowOf(first, 3)!.preliminary).toBe(true);
+    expect(rowOf(first, 5)!.preliminary).toBe(true);
+    expect(rowOf(first, 7)!.preliminary).toBe(false);
+    expect(rowOf(second, 1)!.preliminary).toBe(false);
+    expect(first.preliminary).toBe(true);
+    expect(second.preliminary).toBe(false);
+
+    // Бригада: 1–15 — 1 (A 10), 5 (A 8), 6 (B 8) → «ЖК Ситибэй»; 16–31 — только 1 (B 8) → «ЖК Примавера К14».
+    expect(first.brigades.find(item => item.department_id === D1)?.object?.key).toBe(OBJ_A);
+    expect(second.brigades.find(item => item.department_id === D1)?.object?.key).toBe(OBJ_B);
+    expect(rowOf(second, 1)!.brigade).toMatchObject({ department_id: D1, object: { key: OBJ_B } });
+
+    // Норма половины: Σ плановых часов дней половины; у 6 графика нет до 15.10 — null.
+    expect(rowOf(first, 6)!.norm).toEqual({ hours: null, days: null, complete: false });
+    const cents = (value: number) => Math.round(value * 100);
+    for (const view of [first, second]) {
+      for (const item of view.rows) {
+        if (!item.norm.complete) continue;
+        expect(cents(item.norm.hours!)).toBe(item.days.reduce((sum, day) => sum + cents(day.plan_hours ?? 0), 0));
+      }
+    }
+
+    // Суммы: две половины = месяц у каждого сотрудника (часы и объекты); объекты половины = строкам половины.
+    for (const item of snapshot.rows) {
+      const parts = [rowOf(first, item.employee_id), rowOf(second, item.employee_id)].filter(Boolean);
+      expect(parts.reduce((sum, part) => sum + cents(part!.hours), 0)).toBe(cents(item.hours));
+      const byKey = new Map<string, number>();
+      for (const part of parts) for (const object of part!.objects) byKey.set(object.object.key, (byKey.get(object.object.key) ?? 0) + cents(object.hours));
+      expect(Object.fromEntries(byKey)).toEqual(Object.fromEntries(item.objects.map(object => [object.object.key, cents(object.hours)])));
+    }
+    for (const view of [first, second]) {
+      const byObject = new Map<string, number>();
+      for (const item of view.rows) for (const part of item.objects) byObject.set(part.object.key, (byObject.get(part.object.key) ?? 0) + cents(part.hours));
+      for (const object of view.objects) expect(cents(object.hours)).toBe(byObject.get(object.object.key) ?? 0);
+      expect(view.index.get(1)?.mainKey).toBe(rowOf(view, 1)!.object.key);
+    }
+
+    // Объект табелирования: закреплённый объект, «Офис» по отделу, по СКУД; у половины — тот же, что у месяца.
+    const month = (id: number) => snapshot.rows.find(item => item.employee_id === id)!;
+    expect(month(2).timesheet_object).toEqual({
+      mode: 'object', object: { key: OBJ_A, id: OBJ_A, name: 'ЖК Ситибэй', address: 'ул. Ситибэй, 1' },
+    });
+    expect(month(6).timesheet_object).toEqual({ mode: 'office', object: { key: 'office', id: null, name: 'Офис', address: null } });
+    expect(month(1).timesheet_object).toEqual({ mode: 'skud', object: null });
+    expect(rowOf(first, 2)!.timesheet_object).toEqual(month(2).timesheet_object);
   });
 });

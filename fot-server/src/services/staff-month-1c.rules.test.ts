@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -5,17 +6,23 @@ import {
   aggregateFact,
   decodeStaffMonthCursor,
   encodeStaffMonthCursor,
+  halfNorm,
   matchesFilters,
   normalizeParts,
+  OFFICE_OBJECT,
   pageAfter,
   pickEmployeeBrigade,
   pickLatestVersion,
   pickMainKnownKey,
   sameFilters,
+  staffMonthHalfBounds,
+  timesheetObjectOf,
+  UNKNOWN_OBJECT,
   type IApiObject,
   type IDayRecord,
   type IStaffMonthFilters,
 } from './staff-month-1c.rules.js';
+import { monthBoundsOf } from './staff-month-1c.load.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -29,7 +36,7 @@ const day = (over: Partial<IDayRecord>): IDayRecord => ({
   worked: true, versionId: 1, departmentId: null, frozen: true, preliminary: false, ...over,
 });
 
-const NO_FILTERS: IStaffMonthFilters = { object_key: null, category: null, employee_id: null, days: false, export_state: null };
+const NO_FILTERS: IStaffMonthFilters = { half: null, object_key: null, category: null, employee_id: null, days: false, export_state: null };
 
 describe('staff-month-1c.rules', () => {
   it('пара в двух подачах: поздний created_at, затем больший id', () => {
@@ -110,6 +117,54 @@ describe('staff-month-1c.rules', () => {
     expect(decodeStaffMonthCursor('мусор', 'secret')).toBeNull();
     expect(sameFilters(cursor.filters, { ...cursor.filters, days: true })).toBe(false);
     expect(sameFilters(cursor.filters, { ...cursor.filters, export_state: ['ready', 'changed'] })).toBe(false);
+    expect(sameFilters(cursor.filters, { ...cursor.filters, half: 1 })).toBe(false);
+    expect(sameFilters({ ...cursor.filters, half: 2 }, { ...cursor.filters, half: 2 })).toBe(true);
+    // Курсор v1 (до половин) с настоящей подписью — отклоняется: обход начинается заново.
+    const v1 = Buffer.from(JSON.stringify({ v: 1, m: '2026-10', s: 'snap', f: cursor.filters, l: 120 })).toString('base64url');
+    const v1Signed = `${v1}.${createHmac('sha256', 'secret').update(v1).digest('base64url')}`;
+    expect(decodeStaffMonthCursor(v1Signed, 'secret')).toBeNull();
+  });
+
+  it('половины: границы как у подач табеля (28/29/30/31), началась и закончилась по Москве', () => {
+    const past = (month: string) => monthBoundsOf(month, new Date('2028-06-01T09:00:00Z'));
+    expect(staffMonthHalfBounds(past('2027-02'), 2)).toMatchObject({ from: '2027-02-16', to: '2027-02-28', started: true, ended: true });
+    expect(staffMonthHalfBounds(past('2028-02'), 2)).toMatchObject({ to: '2028-02-29' });
+    expect(staffMonthHalfBounds(past('2026-11'), 2)).toMatchObject({ from: '2026-11-16', to: '2026-11-30', until: '2026-11-30' });
+    expect(staffMonthHalfBounds(past('2026-10'), 1)).toMatchObject({ from: '2026-10-01', to: '2026-10-15', until: '2026-10-15', ended: true });
+    // Текущий месяц: 15-е — первая половина идёт (табель 1–15 могли закрыть днём), вторая не началась.
+    const on15 = monthBoundsOf('2026-11', new Date('2026-11-15T20:00:00Z'));
+    expect(staffMonthHalfBounds(on15, 1)).toMatchObject({ started: true, ended: false, until: '2026-11-15' });
+    expect(staffMonthHalfBounds(on15, 2)).toMatchObject({ started: false, ended: false });
+    // 16-е по Москве (15.11 21:30 UTC): первая закончилась, вторая идёт.
+    const on16 = monthBoundsOf('2026-11', new Date('2026-11-15T21:30:00Z'));
+    expect(staffMonthHalfBounds(on16, 1)).toMatchObject({ ended: true });
+    expect(staffMonthHalfBounds(on16, 2)).toMatchObject({ started: true, ended: false, until: '2026-11-16' });
+    // Последний день месяца — вторая половина ещё идёт.
+    expect(staffMonthHalfBounds(monthBoundsOf('2026-11', new Date('2026-11-30T12:00:00Z')), 2)).toMatchObject({ ended: false });
+  });
+
+  it('норма половины: Σ плановых часов, рабочие дни; день без графика — null, не ноль', () => {
+    const days = [
+      { plan_hours: 8, working_day: true },
+      { plan_hours: 7, working_day: true },
+      { plan_hours: 0, working_day: false },
+    ];
+    expect(halfNorm(days)).toEqual({ hours: 15, days: 2, complete: true });
+    expect(halfNorm([...days, { plan_hours: null, working_day: null }])).toEqual({ hours: null, days: null, complete: false });
+    expect(halfNorm([])).toEqual({ hours: null, days: null, complete: false });
+  });
+
+  it('объект табелирования: объект, «Офис» (режим и адрес), по СКУД, пропавший объект', () => {
+    const lookup = (id: string) => (id === A
+      ? { object: dict.get(A)!, address: 'ул. Ситибэй, 1' }
+      : id === B ? { object: dict.get(B)!, address: ' Текущая деятельность ' } : null);
+    expect(timesheetObjectOf({ mode: 'object', pinnedObjectId: A }, lookup)).toEqual({ mode: 'object', object: dict.get(A) });
+    expect(timesheetObjectOf({ mode: 'object', pinnedObjectId: B }, lookup)).toEqual({ mode: 'office', object: OFFICE_OBJECT });
+    expect(timesheetObjectOf({ mode: 'current_activity', pinnedObjectId: null }, lookup)).toEqual({ mode: 'office', object: OFFICE_OBJECT });
+    expect(timesheetObjectOf({ mode: 'skud', pinnedObjectId: null }, lookup)).toEqual({ mode: 'skud', object: null });
+    expect(timesheetObjectOf({ mode: 'object', pinnedObjectId: 'gone' }, lookup)).toEqual({ mode: 'object', object: UNKNOWN_OBJECT });
+    expect(timesheetObjectOf({ mode: 'object', pinnedObjectId: null }, lookup)).toEqual({ mode: 'object', object: UNKNOWN_OBJECT });
+    expect(timesheetObjectOf(undefined, lookup)).toEqual({ mode: 'skud', object: null });
   });
 
   it('страницы: обход до конца без дублей и пропусков', () => {

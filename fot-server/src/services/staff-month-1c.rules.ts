@@ -9,14 +9,18 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import { SUMMARY_OFFICE, SUMMARY_UNKNOWN } from './payroll/payroll-summary.attribution.js';
+import { isCurrentActivityAddress, SUMMARY_OFFICE, SUMMARY_UNKNOWN } from './payroll/payroll-summary.attribution.js';
 import type { StaffMonthExportState } from './staff-month-1c.export-state.rules.js';
+import { buildTimesheetApprovalPeriod, getTimesheetPeriodDateRange } from './timesheet-period.service.js';
 
 export type StaffMonthCategory = 'worker' | 'itr' | 'office';
 
 /** Откуда основной объект: шаги «Свода» (attributeMonths → resolveSummaryObjects). */
 export type StaffMonthObjectSource =
   | 'hours' | 'mode' | 'month_hours' | 'previous_timesheet' | 'previous_hours' | 'department' | 'current_object' | 'unknown';
+
+/** Откуда объект половины: часы половины, объект табелирования, объект месяца; ошибка режима — unknown. */
+export type StaffMonthHalfObjectSource = 'hours' | 'timesheet_object' | 'month' | 'unknown';
 
 export interface IApiObject {
   /** UUID объекта СКУД, 'office' или 'unknown'. */
@@ -28,6 +32,82 @@ export interface IApiObject {
 
 export const OFFICE_OBJECT: IApiObject = { key: SUMMARY_OFFICE.key, id: null, name: SUMMARY_OFFICE.name, address: null };
 export const UNKNOWN_OBJECT: IApiObject = { key: SUMMARY_UNKNOWN.key, id: null, name: SUMMARY_UNKNOWN.name, address: null };
+
+// ---- Половины месяца: 1–15 и 16–конец, границы — как у подач табеля (timesheet-period.service) ----
+
+export type StaffMonthHalf = 1 | 2;
+
+export const STAFF_MONTH_HALVES: readonly StaffMonthHalf[] = [1, 2];
+
+export interface IStaffMonthHalfBounds {
+  half: StaffMonthHalf;
+  from: string;
+  to: string;
+  /** Последний день с данными внутри половины (сегодня у идущей половины). */
+  until: string;
+  /** Половина началась: у текущего месяца сегодня ≥ её первого дня. */
+  started: boolean;
+  /** Половина закончилась по Москве: сегодня позже её последнего дня (у прошедшего месяца — всегда). */
+  ended: boolean;
+}
+
+/** Границы половины месяца. bounds.until — сегодня (МСК) у текущего месяца, иначе последний день. */
+export const staffMonthHalfBounds = (
+  bounds: { month: string; until: string; open: boolean },
+  half: StaffMonthHalf,
+): IStaffMonthHalfBounds => {
+  const [year, month] = bounds.month.split('-').map(Number);
+  const range = getTimesheetPeriodDateRange(buildTimesheetApprovalPeriod(year, month, half === 1 ? 'H1' : 'H2'));
+  if (!range) throw new Error(`staffMonthHalfBounds: некорректный месяц ${bounds.month}`);
+  const from = range.startDate;
+  const to = range.endDate;
+  return {
+    half,
+    from,
+    to,
+    until: bounds.until < to ? bounds.until : to,
+    started: !bounds.open || bounds.until >= from,
+    ended: !bounds.open || bounds.until > to,
+  };
+};
+
+/** Норма половины: Σ плановых часов дней половины; хоть один день без графика — null (не ноль). */
+export const halfNorm = (
+  days: ReadonlyArray<{ plan_hours: number | null; working_day: boolean | null }>,
+): { hours: number | null; days: number | null; complete: boolean } => {
+  const complete = days.length > 0 && days.every(day => day.plan_hours !== null);
+  if (!complete) return { hours: null, days: null, complete: false };
+  const centi = days.reduce((sum, day) => sum + toCenti(day.plan_hours ?? 0), 0);
+  return { hours: fromCenti(centi), days: days.filter(day => day.working_day === true).length, complete: true };
+};
+
+// ---- Объект табелирования сотрудника за месяц (личный режим 288, прошедший месяц — из фиксации) ----
+
+export type StaffMonthTimesheetMode = 'object' | 'office' | 'skud';
+
+export interface IStaffMonthTimesheetObject {
+  /** object — закреплённый объект; office — «Офис»; skud — по проходам (объекты по дням). */
+  mode: StaffMonthTimesheetMode;
+  object: IApiObject | null;
+}
+
+/**
+ * Объект табелирования из разрешённого режима месяца (resolveExportModes): «Офис» — current_activity или объект с
+ * адресом «Текущая деятельность»; объект пропал из справочника — «Не определён»; режима нет — по СКУД.
+ */
+export const timesheetObjectOf = (
+  mode: { mode: string; pinnedObjectId: string | null } | undefined,
+  lookup: (objectId: string) => { object: IApiObject; address: string | null } | null,
+): IStaffMonthTimesheetObject => {
+  if (mode?.mode === 'current_activity') return { mode: 'office', object: OFFICE_OBJECT };
+  if (mode?.mode === 'object') {
+    const found = mode.pinnedObjectId ? lookup(mode.pinnedObjectId) : null;
+    if (!found) return { mode: 'object', object: UNKNOWN_OBJECT };
+    if (isCurrentActivityAddress(found.address)) return { mode: 'office', object: OFFICE_OBJECT };
+    return { mode: 'object', object: found.object };
+  }
+  return { mode: 'skud', object: null };
+};
 
 export interface IDayPart {
   key: string;
@@ -201,9 +281,14 @@ export const pickEmployeeBrigade = (
   return best?.id ?? null;
 };
 
-// ---- Курсор: v1, снимок, фильтры, последний employee_id; подпись HMAC-SHA256 ----
+// ---- Курсор: v2 (с половиной), снимок, фильтры, последний employee_id; подпись HMAC-SHA256 ----
+
+/** Версия курсора: 2 — с половиной месяца (23.11.2026); курсор v1 отклоняется. */
+const CURSOR_VERSION = 2;
 
 export interface IStaffMonthFilters {
+  /** Половина месяца (1–15 / 16–конец); null — месяц целиком, только чтение. */
+  half: StaffMonthHalf | null;
   object_key: string | null;
   category: StaffMonthCategory | null;
   employee_id: number | null;
@@ -223,7 +308,7 @@ const sign = (secret: string, body: string): string => createHmac('sha256', secr
 
 export const encodeStaffMonthCursor = (cursor: IStaffMonthCursor, secret: string): string => {
   const body = Buffer.from(JSON.stringify({
-    v: 1, m: cursor.month, s: cursor.snapshotId, f: cursor.filters, l: cursor.lastEmployeeId,
+    v: CURSOR_VERSION, m: cursor.month, s: cursor.snapshotId, f: cursor.filters, l: cursor.lastEmployeeId,
   }), 'utf8').toString('base64url');
   return `${body}.${sign(secret, body)}`;
 };
@@ -239,7 +324,7 @@ export const decodeStaffMonthCursor = (raw: string, secret: string): IStaffMonth
     const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as {
       v?: unknown; m?: unknown; s?: unknown; f?: IStaffMonthFilters; l?: unknown;
     };
-    if (parsed.v !== 1 || typeof parsed.m !== 'string' || typeof parsed.s !== 'string'
+    if (parsed.v !== CURSOR_VERSION || typeof parsed.m !== 'string' || typeof parsed.s !== 'string'
       || !parsed.f || !Number.isSafeInteger(parsed.l)) return null;
     return { month: parsed.m, snapshotId: parsed.s, filters: parsed.f, lastEmployeeId: Number(parsed.l) };
   } catch {
@@ -248,7 +333,7 @@ export const decodeStaffMonthCursor = (raw: string, secret: string): IStaffMonth
 };
 
 export const sameFilters = (left: IStaffMonthFilters, right: IStaffMonthFilters): boolean => (
-  left.object_key === right.object_key && left.category === right.category
+  (left.half ?? null) === (right.half ?? null) && left.object_key === right.object_key && left.category === right.category
   && left.employee_id === right.employee_id && left.days === right.days
   && (left.export_state ?? []).join(',') === (right.export_state ?? []).join(',')
 );

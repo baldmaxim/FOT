@@ -5,6 +5,10 @@ const state = vi.hoisted(() => ({
   builds: 0,
   build: null as null | ((month: string) => Promise<unknown>),
   storedBuild: null as null | { fingerprint: string | null; builtAt: string | null; startedAt: string | null },
+  /** Половины, переданные в запись состояний последней сборкой. */
+  persistedHalves: [] as number[],
+  exportInfo: { states: new Map(), acks: new Map() } as { states: Map<number, unknown>; acks: Map<number, unknown> },
+  secondHalfStarted: true,
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -20,8 +24,16 @@ vi.mock('./staff-month-1c.load.js', async importOriginal => ({
 const fakeSnapshot = (month: string) => {
   state.builds += 1;
   const rows = [3, 5, 8, 13, 21].map(id => ({
-    employee_id: id, category: id % 2 === 0 ? 'worker' : 'itr', days: [{ date: `${month}-01` }],
+    employee_id: id, category: id % 2 === 0 ? 'worker' : 'itr', preliminary: false, days: [{ date: `${month}-01` }],
   }));
+  const half = (number: 1 | 2, ids: number[], started = true) => ({
+    bounds: { half: number, from: `${month}-${number === 1 ? '01' : '16'}`, to: `${month}-${number === 1 ? '15' : '31'}`, until: `${month}-15`, started, ended: true },
+    rows: started ? rows.filter(row => ids.includes(row.employee_id)).map(row => ({ ...row, preliminary: row.employee_id === 13 })) : [],
+    index: new Map(ids.map(id => [id, { mainKey: id === 5 ? 'obj-a' : 'office', factByObject: new Map<string, number>() }])),
+    brigades: [],
+    objects: [],
+    preliminary: false,
+  });
   return {
     id: `snap-${state.builds}`,
     month,
@@ -34,6 +46,8 @@ const fakeSnapshot = (month: string) => {
     index: new Map(rows.map(row => [row.employee_id, { mainKey: 'office', factByObject: new Map<string, number>() }])),
     brigades: [],
     objects: [],
+    // 21 принят во второй половине: в первой его нет.
+    halves: { 1: half(1, [3, 5, 8, 13]), 2: half(2, [3, 5, 8, 13, 21], state.secondHalfStarted) },
     meta: { duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0 },
   };
 };
@@ -41,10 +55,13 @@ const fakeSnapshot = (month: string) => {
 vi.mock('./staff-month-1c.export-state.js', () => ({
   loadStaffMonthBuild: vi.fn(async () => state.storedBuild),
   markStaffMonthBuildStarted: vi.fn(async () => undefined),
-  persistStaffMonthStates: vi.fn(async (_month: string, rows: Array<{ employeeId: number }>) => new Map(rows.map(row => [
-    row.employeeId, { revision: 1, present: true, preliminary: false, contentHash: 'h' },
-  ]))),
-  loadStaffMonthExportInfo: vi.fn(async () => ({ states: new Map(), acks: new Map() })),
+  persistStaffMonthStates: vi.fn(async (_month: string, halves: Map<number, Array<{ employeeId: number }>>) => {
+    state.persistedHalves = [...halves.keys()];
+    return new Map([...halves].map(([half, rows]) => [half, new Map(rows.map(row => [
+      row.employeeId, { revision: half * 10, present: true, preliminary: false, contentHash: 'h' },
+    ]))]));
+  }),
+  loadStaffMonthExportInfo: vi.fn(async () => state.exportInfo),
 }));
 
 vi.mock('./staff-month-1c.snapshot.js', () => ({
@@ -61,7 +78,7 @@ import {
   StaffMonthApiError,
 } from './staff-month-1c.service.js';
 
-const FILTERS = { object_key: null, category: null, employee_id: null, days: false, export_state: null };
+const FILTERS = { half: null, object_key: null, category: null, employee_id: null, days: false, export_state: null };
 
 const walk = async (month: string, limit: number, filters = FILTERS): Promise<{ ids: number[]; snapshots: Set<string> }> => {
   const ids: number[] = [];
@@ -92,6 +109,9 @@ describe('staff-month-1c.service — снимки и курсор', () => {
     state.builds = 0;
     state.build = null;
     state.storedBuild = null;
+    state.persistedHalves = [];
+    state.exportInfo = { states: new Map(), acks: new Map() };
+    state.secondHalfStarted = true;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -164,6 +184,68 @@ describe('staff-month-1c.service — снимки и курсор', () => {
     const snapshot = await getStaffMonthSnapshot('2026-10', null);
     vi.setSystemTime(new Date('2026-11-19T10:31:00Z'));
     expect(await codeOf(getStaffMonthSnapshot('2026-10', snapshot.id))).toBe('snapshot_expired');
+  });
+
+  it('месяц целиком — без статусов; export_state без половины — 400', async () => {
+    const page = await listStaffMonthEmployees({ month: '2026-10', filters: FILTERS, limit: 10, cursor: null, snapshotId: null });
+    expect(page.view).toBeNull();
+    expect(page.exportCounts).toBeNull();
+    expect('export_state' in page.rows[0]).toBe(false);
+    expect(await codeOf(listStaffMonthEmployees({
+      month: '2026-10', filters: { ...FILTERS, export_state: ['ready'] }, limit: 10, cursor: null, snapshotId: null,
+    }))).toBe('invalid_filter');
+  });
+
+  it('половина: состав половины, статусы и ревизии своей половины, отбор по объекту — по индексу половины', async () => {
+    const first = await listStaffMonthEmployees({ month: '2026-10', filters: { ...FILTERS, half: 1 }, limit: 10, cursor: null, snapshotId: null });
+    expect(first.rows.map(row => row.employee_id)).toEqual([3, 5, 8, 13]);
+    expect(first.rows[0]).toMatchObject({ present: true, state_revision: 10, content_hash: expect.stringMatching(/^[0-9a-f]{64}$/), export_state: 'ready', ready_for_export: true });
+    expect(first.rows[3]).toMatchObject({ export_state: 'not_ready', ready_for_export: false });
+    expect(first.exportCounts).toEqual({ not_ready: 1, ready: 3, exported: 0, changed: 0 });
+    expect(first.periodReady).toBe(false);
+    const second = await listStaffMonthEmployees({ month: '2026-10', filters: { ...FILTERS, half: 2 }, limit: 10, cursor: null, snapshotId: null });
+    expect(second.rows.map(row => row.employee_id)).toEqual([3, 5, 8, 13, 21]);
+    expect(second.rows[0]).toMatchObject({ state_revision: 20 });
+    expect(state.persistedHalves).toEqual([1, 2]);
+    const byObject = await listStaffMonthEmployees({
+      month: '2026-10', filters: { ...FILTERS, half: 1, object_key: 'obj-a' }, limit: 10, cursor: null, snapshotId: null,
+    });
+    expect(byObject.rows.map(row => row.employee_id)).toEqual([5]);
+  });
+
+  it('половина: надгробие выгруженного — только в «что забрать» (changed) без отбора по объекту', async () => {
+    state.exportInfo = {
+      states: new Map([[99, { revision: 4, present: false, preliminary: false, contentHash: null }]]),
+      acks: new Map([[99, { revision: 3, ackedAt: '2026-11-01T10:00:00Z', documentRef: 'ЗУП-1' }]]),
+    };
+    const page = await listStaffMonthEmployees({
+      month: '2026-10', filters: { ...FILTERS, half: 1, export_state: ['ready', 'changed'] }, limit: 10, cursor: null, snapshotId: null,
+    });
+    expect(page.rows.map(row => row.employee_id)).toEqual([3, 5, 8, 99]);
+    expect(page.rows[3]).toMatchObject({ present: false, state_revision: 4, content_hash: null, export_state: 'changed' });
+    expect(page.exportCounts?.changed).toBe(1);
+    const withObject = await listStaffMonthEmployees({
+      month: '2026-10', filters: { ...FILTERS, half: 1, export_state: ['changed'], object_key: 'office' }, limit: 10, cursor: null, snapshotId: null,
+    });
+    expect(withObject.rows).toEqual([]);
+  });
+
+  it('курсор другой половины — invalid_cursor; не начавшаяся половина не пишется и отдаёт half_not_started', async () => {
+    const first = await listStaffMonthEmployees({ month: '2026-10', filters: { ...FILTERS, half: 1 }, limit: 2, cursor: null, snapshotId: null });
+    expect(await codeOf(listStaffMonthEmployees({
+      month: '2026-10', filters: { ...FILTERS, half: 2 }, limit: 2, cursor: first.nextCursor, snapshotId: null,
+    }))).toBe('invalid_cursor');
+    expect(await codeOf(listStaffMonthEmployees({
+      month: '2026-10', filters: FILTERS, limit: 2, cursor: first.nextCursor, snapshotId: null,
+    }))).toBe('invalid_cursor');
+
+    resetStaffMonthSnapshots();
+    state.secondHalfStarted = false;
+    await getStaffMonthSnapshot('2026-11', null);
+    expect(state.persistedHalves).toEqual([1]);
+    expect(await codeOf(listStaffMonthEmployees({
+      month: '2026-11', filters: { ...FILTERS, half: 2 }, limit: 2, cursor: null, snapshotId: null,
+    }))).toBe('half_not_started');
   });
 
   it('сборка дольше 25 с — 503 snapshot_building, потом готовый снимок; ошибка сборки — calculation_failed', async () => {

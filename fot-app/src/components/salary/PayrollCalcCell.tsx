@@ -82,7 +82,11 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
             </span>
           )}
           {(row.zup3_export ?? []).map(cell => (
-            <PayrollZup3Badge key={cell.month} cell={cell} showMonth={(row.zup3_export?.length ?? 0) > 1} />
+            <PayrollZup3Badge
+              key={`${cell.month}|${cell.half}`}
+              cell={cell}
+              showMonth={new Set((row.zup3_export ?? []).map(item => item.month)).size > 1}
+            />
           ))}
         </td>
       );

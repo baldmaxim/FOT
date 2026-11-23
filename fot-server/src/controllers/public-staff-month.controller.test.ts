@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 /**
- * Контракт API для ЗУП3 «сотрудники месяца»: гейт ключа, разбор параметров, коды ошибок и конверт ответа.
- * Расчёт и снимки замоканы — их проверяют staff-month-1c.*.test.ts и scripts/check-staff-month-api.ts.
+ * Контракт API для ЗУП3 «сотрудники месяца»: гейт ключа, разбор параметров (в том числе половина месяца), коды ошибок
+ * и конверт ответа. Расчёт и снимки замоканы — их проверяют staff-month-1c.*.test.ts и scripts/check-staff-month-api.ts.
  */
 
 const { getKeyTables, listEmployees, getSnapshot, ackStaffMonth } = vi.hoisted(() => ({
@@ -26,6 +26,14 @@ vi.mock('../services/staff-month-1c.service.js', async importOriginal => ({
 import { StaffMonthApiError } from '../services/staff-month-1c.service.js';
 import { parseStaffMonth, publicStaffMonthController } from './public-staff-month.controller.js';
 
+const HALF_1 = {
+  bounds: { half: 1, from: '2026-10-01', to: '2026-10-15', until: '2026-10-15', started: true, ended: true },
+  rows: [{ employee_id: 1 }],
+  brigades: [{ department_id: 'b1', name: 'бр.Амонов М.Н.', object: null, objects: [], members: [{ employee_id: 1, hours: 8 }] }],
+  objects: [{ object: { key: 'office', id: null, name: 'Офис', address: null }, employees_fact: 1, employees_main: 1, hours: 8 }],
+  preliminary: false,
+};
+
 const SNAPSHOT = {
   id: '3f1d2c4b-0000-4000-8000-000000000001',
   month: '2026-10',
@@ -35,8 +43,14 @@ const SNAPSHOT = {
   rows: [{ employee_id: 1 }, { employee_id: 2 }],
   brigades: [{ department_id: 'b1', name: 'бр.Амонов М.Н.', object: null, objects: [], members: [] }],
   objects: [{ object: { key: 'office', id: null, name: 'Офис', address: null }, employees_fact: 1, employees_main: 2, hours: 8 }],
+  halves: {
+    1: HALF_1,
+    2: { ...HALF_1, bounds: { half: 2, from: '2026-10-16', to: '2026-10-31', until: '2026-10-31', started: true, ended: true } },
+  },
   meta: { duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0 },
 };
+
+const FILTERS = { half: null, object_key: null, category: null, employee_id: null, days: false, export_state: null };
 
 const makeReq = (query: Record<string, string | string[]>, withKey = true, body: unknown = undefined, allowAck = false): Request => ({
   query,
@@ -60,10 +74,15 @@ describe('public-staff-month.controller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getKeyTables.mockResolvedValue([{ table_name: 'employees' }]);
-    listEmployees.mockResolvedValue({
-      snapshot: SNAPSHOT, rows: [{ employee_id: 1 }], total: 2, nextCursor: 'c1',
-      exportCounts: { not_ready: 0, ready: 2, exported: 0, changed: 0 }, monthReady: true,
-    });
+    listEmployees.mockImplementation(async (params: { filters: { half: 1 | 2 | null } }) => ({
+      snapshot: SNAPSHOT,
+      view: params.filters.half ? SNAPSHOT.halves[params.filters.half] : null,
+      rows: [{ employee_id: 1 }],
+      total: 2,
+      nextCursor: 'c1',
+      exportCounts: params.filters.half ? { not_ready: 0, ready: 2, exported: 0, changed: 0 } : null,
+      periodReady: params.filters.half ? true : null,
+    }));
     getSnapshot.mockResolvedValue(SNAPSHOT);
   });
 
@@ -98,7 +117,7 @@ describe('public-staff-month.controller', () => {
     expect(listEmployees).not.toHaveBeenCalled();
   });
 
-  it('сотрудники: конверт ответа и фильтры', async () => {
+  it('сотрудники за месяц: конверт без статусов и фильтры', async () => {
     const res = makeRes();
     await publicStaffMonthController.employees(makeReq({
       month: '2026-10', object_key: 'OFFICE', category: 'worker', employee_id: '42', days: '1', limit: '500',
@@ -106,22 +125,50 @@ describe('public-staff-month.controller', () => {
     expect(res.statusCode).toBe(200);
     expect(listEmployees).toHaveBeenCalledWith({
       month: '2026-10',
-      filters: { object_key: 'office', category: 'worker', employee_id: 42, days: true, export_state: null },
+      filters: { half: null, object_key: 'office', category: 'worker', employee_id: 42, days: true, export_state: null },
       limit: 500,
       cursor: null,
       snapshotId: null,
     });
     expect(res.payload).toEqual({
       success: true,
-      period: { month: '2026-10', from: '2026-10-01', to: '2026-10-31', as_of: '2026-10-31' },
+      period: { month: '2026-10', half: null, from: '2026-10-01', to: '2026-10-31', as_of: '2026-10-31' },
       snapshot: { id: SNAPSHOT.id, generated_at: SNAPSHOT.generatedAt, preliminary: false },
       data: [{ employee_id: 1 }],
-      meta: {
-        employees_count: 2, duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0,
-        export_counts: { not_ready: 0, ready: 2, exported: 0, changed: 0 }, month_ready: true,
-      },
+      meta: { employees_count: 2, duplicate_days: 0, object_config_errors: 0, objects_not_frozen: 0 },
       next_cursor: 'c1',
     });
+  });
+
+  it('половина: границы половины в конверте, статусы в meta', async () => {
+    const res = makeRes();
+    await publicStaffMonthController.employees(makeReq({ month: '2026-10', half: '1', export_state: 'ready' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(listEmployees.mock.calls[0][0].filters).toEqual({ ...FILTERS, half: 1, export_state: ['ready'] });
+    expect(res.payload.period).toEqual({ month: '2026-10', half: 1, from: '2026-10-01', to: '2026-10-15', as_of: '2026-10-15' });
+    expect(res.payload.meta).toMatchObject({ export_counts: { ready: 2 }, period_ready: true });
+  });
+
+  it('половина: 400 на half=3, export_state без half, вторая половина текущего месяца до 16-го', async () => {
+    const codeOf = async (query: Record<string, string>) => {
+      const res = makeRes();
+      await publicStaffMonthController.employees(makeReq(query), res);
+      return [res.statusCode, res.payload?.code];
+    };
+    expect(await codeOf({ month: '2026-10', half: '3' })).toEqual([400, 'invalid_filter']);
+    expect(await codeOf({ month: '2026-10', export_state: 'ready' })).toEqual([400, 'invalid_filter']);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-10T09:00:00Z'));
+    try {
+      expect(await codeOf({ month: '2026-11', half: '2' })).toEqual([400, 'half_not_started']);
+      expect(await codeOf({ month: '2026-11', half: '1' })).toEqual([200, undefined]);
+      const brigades = makeRes();
+      await publicStaffMonthController.brigades(makeReq({ month: '2026-11', half: '2' }), brigades);
+      expect(brigades.payload.code).toBe('half_not_started');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(listEmployees).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -159,18 +206,18 @@ describe('public-staff-month.controller', () => {
 
   it('отбор по статусу выгрузки: порядок фиксирован, неизвестный статус — 400', async () => {
     const res = makeRes();
-    await publicStaffMonthController.employees(makeReq({ month: '2026-10', export_state: 'changed,ready' }), res);
+    await publicStaffMonthController.employees(makeReq({ month: '2026-10', half: '2', export_state: 'changed,ready' }), res);
     expect(res.statusCode).toBe(200);
     expect(listEmployees.mock.calls[0][0].filters.export_state).toEqual(['ready', 'changed']);
     const bad = makeRes();
-    await publicStaffMonthController.employees(makeReq({ month: '2026-10', export_state: 'loaded' }), bad);
+    await publicStaffMonthController.employees(makeReq({ month: '2026-10', half: '2', export_state: 'loaded' }), bad);
     expect(bad.statusCode).toBe(400);
     expect(bad.payload.code).toBe('invalid_filter');
   });
 
-  it('ACK: без права подтверждения — 403; кривое тело и повтор — 400; иначе — в сервис', async () => {
+  it('ACK: без права подтверждения — 403; кривое тело, повтор и без half — 400; иначе — в сервис', async () => {
     const body = {
-      month: '2026-10', document_ref: 'ЗУП-15',
+      month: '2026-10', half: 1, document_ref: 'ЗУП-15',
       employees: [{ employee_id: 1544, state_revision: 3, content_hash: 'a'.repeat(64) }],
     };
     const forbidden = makeRes();
@@ -187,12 +234,22 @@ describe('public-staff-month.controller', () => {
     await publicStaffMonthController.ack(makeReq({}, true, { ...body, employees: [body.employees[0], body.employees[0]] }, true), dup);
     expect(dup.statusCode).toBe(400);
 
+    const { half: _half, ...withoutHalf } = body;
+    const noHalf = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, withoutHalf, true), noHalf);
+    expect(noHalf.statusCode).toBe(400);
+    expect(noHalf.payload.error).toContain('half');
+    const badHalf = makeRes();
+    await publicStaffMonthController.ack(makeReq({}, true, { ...body, half: '1' }, true), badHalf);
+    expect(badHalf.statusCode).toBe(400);
+    expect(ackStaffMonth).not.toHaveBeenCalled();
+
     ackStaffMonth.mockResolvedValue({ accepted: [{ employee_id: 1544, state_revision: 3, acked_at: '2026-11-20T10:00:00Z' }], rejected: [] });
     const ok = makeRes();
     await publicStaffMonthController.ack(makeReq({}, true, body, true), ok);
     expect(ok.statusCode).toBe(200);
     expect(ackStaffMonth).toHaveBeenCalledWith({
-      month: '2026-10', documentRef: 'ЗУП-15', keyId: 'key-1',
+      month: '2026-10', half: 1, documentRef: 'ЗУП-15', keyId: 'key-1',
       items: [{ employeeId: 1544, revision: 3, contentHash: 'a'.repeat(64) }],
     });
     expect(ok.payload).toMatchObject({ success: true, accepted: [{ employee_id: 1544 }], rejected: [] });
@@ -208,5 +265,15 @@ describe('public-staff-month.controller', () => {
     await publicStaffMonthController.brigades(makeReq({ month: '2026-10' }), resBrigades);
     expect(resBrigades.payload.data).toEqual(SNAPSHOT.brigades);
     expect(resBrigades.payload.next_cursor).toBeNull();
+
+    // Половина — бригады и объекты половины, границы половины в конверте.
+    const halfObjects = makeRes();
+    await publicStaffMonthController.objects(makeReq({ month: '2026-10', half: '1' }), halfObjects);
+    expect(halfObjects.payload.data).toEqual(HALF_1.objects);
+    expect(halfObjects.payload.meta.employees_count).toBe(1);
+    expect(halfObjects.payload.period).toMatchObject({ half: 1, from: '2026-10-01', to: '2026-10-15' });
+    const halfBrigades = makeRes();
+    await publicStaffMonthController.brigades(makeReq({ month: '2026-10', half: '1' }), halfBrigades);
+    expect(halfBrigades.payload.data).toEqual(HALF_1.brigades);
   });
 });

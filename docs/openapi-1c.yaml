@@ -631,14 +631,16 @@ paths:
     get:
       tags: [staff-month]
       operationId: getStaffMonthEmployees
-      summary: Сотрудники месяца — объект, часы, категория, дни
+      summary: Сотрудники половины месяца или месяца — объект, часы, категория, объект табелирования, дни
       description: |
-        Закрытый день — последняя редакция согласованной подачи; живой — только если закрытого нет
-        (`source = live`). Факт — часы `work`, `manual`, `remote`, `sick_worked`, `study_day`; у неявок 0.
-        Страницы одного обхода читают один снимок: курсор держит `snapshot_id` и параметры отбора.
+        `half=1` (1–15) или `half=2` (16–конец) — половина со статусом выгрузки; без `half` — месяц целиком, только
+        чтение, без статусов. Закрытый день — последняя редакция согласованной подачи; живой — только если закрытого
+        нет (`source = live`). Факт — часы `work`, `manual`, `remote`, `sick_worked`, `study_day`; у неявок 0.
+        Страницы одного обхода читают один снимок: курсор держит `snapshot_id`, половину и параметры отбора.
         Нужен доступ ключа к таблице `employees`.
       parameters:
         - $ref: '#/components/parameters/StaffMonth'
+        - $ref: '#/components/parameters/StaffMonthHalf'
         - name: object_key
           in: query
           description: UUID объекта, `office` или `unknown`. Основной объект или фактические часы на нём.
@@ -674,8 +676,8 @@ paths:
         - name: export_state
           in: query
           description: |
-            Статусы через запятую: `not_ready`, `ready`, `exported`, `changed`. «Что забрать» — `ready,changed`; в этом
-            режиме приходят и надгробия (`present: false`).
+            Только с `half` (без него — 400 `invalid_filter`). Статусы через запятую: `not_ready`, `ready`, `exported`,
+            `changed`. «Что забрать» — `ready,changed`; в этом режиме приходят и надгробия (`present: false`).
           schema:
             type: string
         - $ref: '#/components/parameters/StaffMonthSnapshot'
@@ -709,20 +711,25 @@ paths:
     post:
       tags: [staff-month]
       operationId: ackStaffMonth
-      summary: Подтвердить приём строк в ЗУП3
+      summary: Подтвердить приём строк половины месяца в ЗУП3
       description: |
-        Подтверждаются `state_revision` и `content_hash` из `GET /staff-month` (у надгробия хеш `null`). Проверка — по
-        сохранённым версиям, не по снимку. Нужен ключ с разрешением подтверждения (как у обмена табелями).
+        Подтверждаются `state_revision` и `content_hash` из `GET /staff-month` с тем же `half` (у надгробия хеш `null`).
+        Подтверждение половины другую половину не трогает. Проверка — по сохранённым версиям, не по снимку. Нужен ключ
+        с разрешением подтверждения (как у обмена табелями).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [month, employees]
+              required: [month, half, employees]
               properties:
                 month:
                   type: string
+                half:
+                  type: integer
+                  enum: [1, 2]
+                  description: 1 — 1–15, 2 — 16–конец месяца.
                 document_ref:
                   type: [string, 'null']
                   maxLength: 200
@@ -940,6 +947,7 @@ paths:
         (`null`, если других часов нет).
       parameters:
         - $ref: '#/components/parameters/StaffMonth'
+        - $ref: '#/components/parameters/StaffMonthHalf'
         - $ref: '#/components/parameters/StaffMonthSnapshot'
       responses:
         '200':
@@ -977,6 +985,7 @@ paths:
         правило, что у отбора `object_key`. `office` и `unknown` входят.
       parameters:
         - $ref: '#/components/parameters/StaffMonth'
+        - $ref: '#/components/parameters/StaffMonthHalf'
         - $ref: '#/components/parameters/StaffMonthSnapshot'
       responses:
         '200':
@@ -1057,6 +1066,15 @@ components:
       schema:
         type: string
         pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+    StaffMonthHalf:
+      name: half
+      in: query
+      description: |
+        `1` — 1–15, `2` — 16–конец месяца. Не передан — месяц целиком (без статусов). Вторая половина текущего месяца
+        до 16-го — 400 `half_not_started`.
+      schema:
+        type: string
+        enum: ['1', '2']
     StaffMonthSnapshot:
       name: snapshot_id
       in: query
@@ -1102,7 +1120,7 @@ components:
 
     StaffMonthError:
       description: |
-        `400 invalid_month | month_not_supported | invalid_filter | invalid_cursor` — не повторять;
+        `400 invalid_month | month_not_supported | invalid_filter | half_not_started | invalid_cursor` — не повторять;
         `409 snapshot_expired` — начать обход заново без `cursor` и `snapshot_id`.
       content:
         application/json:
@@ -1619,7 +1637,7 @@ components:
           const: false
         code:
           type: string
-          enum: [invalid_month, month_not_supported, invalid_filter, invalid_cursor, snapshot_expired, snapshot_building, calculation_failed, internal_error]
+          enum: [invalid_month, month_not_supported, invalid_filter, half_not_started, invalid_cursor, invalid_body, forbidden, snapshot_expired, snapshot_building, calculation_failed, internal_error]
         error:
           type: string
         retryable:
@@ -1657,6 +1675,9 @@ components:
           properties:
             month:
               type: string
+            half:
+              type: [integer, 'null']
+              enum: [1, 2, null]
             from:
               type: string
               format: date
@@ -1691,7 +1712,7 @@ components:
               type: integer
             export_counts:
               type: object
-              description: Только у `GET /staff-month`.
+              description: Только у `GET /staff-month` с `half`.
               properties:
                 not_ready:
                   type: integer
@@ -1701,9 +1722,9 @@ components:
                   type: integer
                 changed:
                   type: integer
-            month_ready:
+            period_ready:
               type: boolean
-              description: Не готовых нет, неподтверждённых надгробий нет.
+              description: Только с `half` — половина закончилась, не готовых и неподтверждённых надгробий нет.
         next_cursor:
           type: [string, 'null']
     StaffMonthDay:
@@ -1759,7 +1780,22 @@ components:
           $ref: '#/components/schemas/StaffMonthObject'
         object_source:
           type: string
-          enum: [hours, mode, month_hours, previous_timesheet, previous_hours, department, current_object, unknown]
+          description: Месяц — шаги «Свода»; половина — `hours`, `timesheet_object`, `month`, `unknown`.
+          enum: [hours, mode, month_hours, previous_timesheet, previous_hours, department, current_object, timesheet_object, month, unknown]
+        timesheet_object:
+          type: object
+          description: |
+            Объект табелирования (объект выполнения) за месяц: `object` — закреплённый объект, `office` — «Офис»,
+            `skud` — не закреплён (объекты по дням в `days[].objects`, `object: null`). Прошедший месяц — на конец
+            месяца; без личного объекта — по отделу, не фиксируется.
+          properties:
+            mode:
+              type: string
+              enum: [object, office, skud]
+            object:
+              oneOf:
+                - $ref: '#/components/schemas/StaffMonthObject'
+                - type: 'null'
         objects:
           type: array
           items:
@@ -1777,6 +1813,7 @@ components:
               type: boolean
             weekend_quota:
               type: object
+              description: Только у месяца (у половины поля нет).
               properties:
                 saturdays:
                   type: integer
@@ -1803,7 +1840,7 @@ components:
           type: boolean
         present:
           type: boolean
-          description: '`false` — надгробие: сотрудника больше нет в месяце, строку в ЗУП3 удалить.'
+          description: Только с `half`. `false` — надгробие, сотрудника больше нет в половине, его строку за половину в ЗУП3 удалить.
         state_revision:
           type: integer
         content_hash:

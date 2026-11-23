@@ -1,7 +1,9 @@
 /**
- * Статусы выгрузки «сотрудников месяца» в ЗУП3 — хранение (миграция 373): ревизии состояний пар «сотрудник + месяц»,
- * указатель на текущую ревизию и подтверждения 1С (ACK). ACK проверяется по сохранённым ревизиям, а не по снимку
- * в памяти, поэтому работает и после рестарта сервера. Правила — staff-month-1c.export-state.rules.ts.
+ * Статусы выгрузки «сотрудников месяца» в ЗУП3 по половинам месяца — хранение (миграция 375): ревизии состояний
+ * «сотрудник + месяц + половина», указатель на текущую ревизию и подтверждения 1С (ACK). ACK проверяется по
+ * сохранённым ревизиям, а не по снимку в памяти, поэтому работает и после рестарта сервера. Подтверждение половины
+ * другую половину не трогает. Правила — staff-month-1c.export-state.rules.ts. Таблицы 373 (статусы за месяц) не
+ * используются.
  */
 import type { PoolClient } from 'pg';
 
@@ -15,6 +17,7 @@ import {
   type StaffMonthAckRejection,
   type StaffMonthExportState,
 } from './staff-month-1c.export-state.rules.js';
+import type { StaffMonthHalf } from './staff-month-1c.rules.js';
 
 interface IStateRow {
   employee_id: number;
@@ -39,72 +42,80 @@ const toState = (row: IStateRow): IStaffMonthState => ({
   contentHash: row.content_hash,
 });
 
+const ISO = (column: string): string => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+
 const CURRENT_STATES_SQL = `
-  SELECT s.employee_id, r.state_revision, r.present, r.preliminary, r.content_hash,
-         to_char(r.computed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS computed_at
-    FROM staff_month_1c_states s
-    JOIN staff_month_1c_state_revisions r
-      ON r.employee_id = s.employee_id AND r.month = s.month AND r.state_revision = s.current_revision`;
+  SELECT s.employee_id, r.state_revision, r.present, r.preliminary, r.content_hash, ${ISO('r.computed_at')} AS computed_at
+    FROM staff_month_1c_half_states s
+    JOIN staff_month_1c_half_revisions r
+      ON r.employee_id = s.employee_id AND r.month = s.month AND r.half = s.half AND r.state_revision = s.current_revision`;
 
 /** Последнее подтверждение пары — подтверждённая ревизия с наибольшим номером. */
 const LAST_ACKS_SQL = `
-  SELECT DISTINCT ON (employee_id, month) employee_id, month, state_revision,
-         to_char(acked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS acked_at, document_ref
-    FROM staff_month_1c_exports`;
+  SELECT DISTINCT ON (employee_id, month, half) employee_id, state_revision, ${ISO('acked_at')} AS acked_at, document_ref
+    FROM staff_month_1c_half_exports`;
 
-const loadCurrentStates = async (client: PoolClient, monthStart: string): Promise<Map<number, IStaffMonthState>> => {
-  const { rows } = await client.query<IStateRow>(`${CURRENT_STATES_SQL} WHERE s.month = $1::date`, [monthStart]);
+const loadCurrentStates = async (client: PoolClient, monthStart: string, half: StaffMonthHalf): Promise<Map<number, IStaffMonthState>> => {
+  const { rows } = await client.query<IStateRow>(`${CURRENT_STATES_SQL} WHERE s.month = $1::date AND s.half = $2`, [monthStart, half]);
   return new Map(rows.map(row => [Number(row.employee_id), toState(row)]));
 };
 
+export type StaffMonthHalfStateRows = ReadonlyArray<{ employeeId: number; preliminary: boolean; contentHash: string }>;
+
 /**
- * Состояния после сборки снимка месяца — одной транзакцией под замком месяца: новые ревизии там, где тройка
- * present / preliminary / content_hash изменилась, надгробия у пропавших. Возвращает текущие ревизии всех пар.
+ * Состояния после сборки снимка — одной транзакцией под замком месяца, по каждой переданной половине: новые ревизии
+ * там, где тройка present / preliminary / content_hash изменилась, надгробия у пропавших. Не начавшуюся половину не
+ * передают (иначе её прошлые строки стали бы надгробиями). Возвращает текущие ревизии всех пар по половинам.
  */
 export const persistStaffMonthStates = async (
   month: string,
-  rows: ReadonlyArray<{ employeeId: number; preliminary: boolean; contentHash: string }>,
+  halves: ReadonlyMap<StaffMonthHalf, StaffMonthHalfStateRows>,
   fingerprint: string,
-): Promise<Map<number, IStaffMonthState>> => withTransaction(async client => {
+): Promise<Map<StaffMonthHalf, Map<number, IStaffMonthState>>> => withTransaction(async client => {
   const monthStart = `${month}-01`;
-  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`staff_month_1c_states:${month}`]);
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`staff_month_1c_half_states:${month}`]);
   await client.query(
-    `INSERT INTO staff_month_1c_builds (month, fingerprint, built_at) VALUES ($1::date, $2, now())
+    `INSERT INTO staff_month_1c_half_builds (month, fingerprint, built_at) VALUES ($1::date, $2, now())
      ON CONFLICT (month) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, built_at = now()`,
     [monthStart, fingerprint],
   );
-  const current = await loadCurrentStates(client, monthStart);
-  const next = nextStaffMonthRevisions(current, rows);
-  if (next.size > 0) {
-    const entries = [...next];
-    const params = [
-      monthStart,
-      entries.map(([employeeId]) => employeeId),
-      entries.map(([, state]) => state.revision),
-      entries.map(([, state]) => state.present),
-      entries.map(([, state]) => state.preliminary),
-      entries.map(([, state]) => state.contentHash),
-    ];
-    await client.query(
-      `INSERT INTO staff_month_1c_state_revisions (employee_id, month, state_revision, present, preliminary, content_hash)
-       SELECT e.id, $1::date, e.rev, e.present, e.preliminary, e.hash
-         FROM unnest($2::int[], $3::bigint[], $4::boolean[], $5::boolean[], $6::text[])
-              AS e(id, rev, present, preliminary, hash)
-         JOIN employees emp ON emp.id = e.id`,
-      params,
-    );
-    await client.query(
-      `INSERT INTO staff_month_1c_states (employee_id, month, current_revision)
-       SELECT e.id, $1::date, e.rev
-         FROM unnest($2::int[], $3::bigint[]) AS e(id, rev)
-         JOIN employees emp ON emp.id = e.id
-       ON CONFLICT (employee_id, month) DO UPDATE SET current_revision = EXCLUDED.current_revision`,
-      params.slice(0, 3),
-    );
+  const result = new Map<StaffMonthHalf, Map<number, IStaffMonthState>>();
+  for (const [half, rows] of halves) {
+    const current = await loadCurrentStates(client, monthStart, half);
+    const next = nextStaffMonthRevisions(current, rows);
+    if (next.size > 0) {
+      const entries = [...next];
+      const params = [
+        monthStart,
+        half,
+        entries.map(([employeeId]) => employeeId),
+        entries.map(([, state]) => state.revision),
+        entries.map(([, state]) => state.present),
+        entries.map(([, state]) => state.preliminary),
+        entries.map(([, state]) => state.contentHash),
+      ];
+      await client.query(
+        `INSERT INTO staff_month_1c_half_revisions (employee_id, month, half, state_revision, present, preliminary, content_hash)
+         SELECT e.id, $1::date, $2, e.rev, e.present, e.preliminary, e.hash
+           FROM unnest($3::int[], $4::bigint[], $5::boolean[], $6::boolean[], $7::text[])
+                AS e(id, rev, present, preliminary, hash)
+           JOIN employees emp ON emp.id = e.id`,
+        params,
+      );
+      await client.query(
+        `INSERT INTO staff_month_1c_half_states (employee_id, month, half, current_revision)
+         SELECT e.id, $1::date, $2, e.rev
+           FROM unnest($3::int[], $4::bigint[]) AS e(id, rev)
+           JOIN employees emp ON emp.id = e.id
+         ON CONFLICT (employee_id, month, half) DO UPDATE SET current_revision = EXCLUDED.current_revision`,
+        params.slice(0, 4),
+      );
+    }
+    const merged = new Map(current);
+    for (const [employeeId, state] of next) merged.set(employeeId, state);
+    result.set(half, merged);
   }
-  const merged = new Map(current);
-  for (const [employeeId, state] of next) merged.set(employeeId, state);
-  return merged;
+  return result;
 });
 
 export interface IStaffMonthBuild {
@@ -113,13 +124,11 @@ export interface IStaffMonthBuild {
   startedAt: string | null;
 }
 
-const ISO = (column: string): string => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
-
 /** Последняя сборка месяца (отпечаток, когда собрана и когда начата фоновая) — для фонового обновления; нет — null. */
 export const loadStaffMonthBuild = async (month: string): Promise<IStaffMonthBuild | null> => {
   const [row] = await query<{ fingerprint: string | null; built_at: string | null; started_at: string | null }>(
     `SELECT fingerprint, ${ISO('built_at')} AS built_at, ${ISO('started_at')} AS started_at
-       FROM staff_month_1c_builds WHERE month = $1::date`,
+       FROM staff_month_1c_half_builds WHERE month = $1::date`,
     [`${month}-01`],
   );
   return row ? { fingerprint: row.fingerprint, builtAt: row.built_at, startedAt: row.started_at } : null;
@@ -128,7 +137,7 @@ export const loadStaffMonthBuild = async (month: string): Promise<IStaffMonthBui
 /** Фоновая сборка месяца начата — отметка до сборки (сбой или рестарт оставят её незавершённой). */
 export const markStaffMonthBuildStarted = async (month: string): Promise<void> => {
   await query(
-    `INSERT INTO staff_month_1c_builds (month, started_at) VALUES ($1::date, now())
+    `INSERT INTO staff_month_1c_half_builds (month, started_at) VALUES ($1::date, now())
      ON CONFLICT (month) DO UPDATE SET started_at = now()`,
     [`${month}-01`],
   );
@@ -139,12 +148,15 @@ export interface IStaffMonthExportInfo {
   acks: Map<number, IStaffMonthAck>;
 }
 
-/** Текущие состояния и последние подтверждения всех пар месяца. */
-export const loadStaffMonthExportInfo = async (month: string): Promise<IStaffMonthExportInfo> => {
+/** Текущие состояния и последние подтверждения всех пар половины. */
+export const loadStaffMonthExportInfo = async (month: string, half: StaffMonthHalf): Promise<IStaffMonthExportInfo> => {
   const monthStart = `${month}-01`;
   const [states, acks] = await Promise.all([
-    query<IStateRow>(`${CURRENT_STATES_SQL} WHERE s.month = $1::date`, [monthStart]),
-    query<IAckRow>(`${LAST_ACKS_SQL} WHERE month = $1::date ORDER BY employee_id, month, state_revision DESC`, [monthStart]),
+    query<IStateRow>(`${CURRENT_STATES_SQL} WHERE s.month = $1::date AND s.half = $2`, [monthStart, half]),
+    query<IAckRow>(
+      `${LAST_ACKS_SQL} WHERE month = $1::date AND half = $2 ORDER BY employee_id, month, half, state_revision DESC`,
+      [monthStart, half],
+    ),
   ]);
   return {
     states: new Map(states.map(row => [Number(row.employee_id), toState(row)])),
@@ -159,9 +171,10 @@ export interface IStaffMonthAckResult {
   rejected: Array<{ employee_id: number; state_revision: number; code: StaffMonthAckRejection }>;
 }
 
-/** Подтверждение 1С: принимается выданная, не предварительная ревизия с тем же хешем; повтор — прежнее acked_at. */
+/** Подтверждение 1С половины: принимается выданная, не предварительная ревизия с тем же хешем; повтор — прежнее acked_at. */
 export const ackStaffMonth = async (input: {
   month: string;
+  half: StaffMonthHalf;
   documentRef: string | null;
   keyId: string | null;
   items: ReadonlyArray<{ employeeId: number; revision: number; contentHash: string | null }>;
@@ -169,10 +182,10 @@ export const ackStaffMonth = async (input: {
   const monthStart = `${input.month}-01`;
   const { rows } = await client.query<IStateRow>(
     `SELECT r.employee_id, r.state_revision, r.present, r.preliminary, r.content_hash
-       FROM staff_month_1c_state_revisions r
-       JOIN unnest($2::int[], $3::bigint[]) AS q(id, rev) ON q.id = r.employee_id AND q.rev = r.state_revision
-      WHERE r.month = $1::date`,
-    [monthStart, input.items.map(item => item.employeeId), input.items.map(item => item.revision)],
+       FROM staff_month_1c_half_revisions r
+       JOIN unnest($3::int[], $4::bigint[]) AS q(id, rev) ON q.id = r.employee_id AND q.rev = r.state_revision
+      WHERE r.month = $1::date AND r.half = $2`,
+    [monthStart, input.half, input.items.map(item => item.employeeId), input.items.map(item => item.revision)],
   );
   const known = new Map(rows.map(row => [`${Number(row.employee_id)}|${Number(row.state_revision)}`, toState(row)]));
   const result: IStaffMonthAckResult = { accepted: [], rejected: [] };
@@ -184,17 +197,17 @@ export const ackStaffMonth = async (input: {
     }
     const { rows: saved } = await client.query<{ acked_at: string }>(
       `WITH ins AS (
-         INSERT INTO staff_month_1c_exports (employee_id, month, state_revision, content_hash, document_ref, data_api_key_id)
-         VALUES ($1, $2::date, $3, $4, $5, $6)
-         ON CONFLICT (employee_id, month, state_revision) DO NOTHING
+         INSERT INTO staff_month_1c_half_exports (employee_id, month, half, state_revision, content_hash, document_ref, data_api_key_id)
+         VALUES ($1, $2::date, $3, $4, $5, $6, $7)
+         ON CONFLICT (employee_id, month, half, state_revision) DO NOTHING
          RETURNING acked_at
        )
-       SELECT to_char(acked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS acked_at FROM ins
+       SELECT ${ISO('acked_at')} AS acked_at FROM ins
        UNION ALL
-       SELECT to_char(acked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM staff_month_1c_exports
-        WHERE employee_id = $1 AND month = $2::date AND state_revision = $3
+       SELECT ${ISO('acked_at')} FROM staff_month_1c_half_exports
+        WHERE employee_id = $1 AND month = $2::date AND half = $3 AND state_revision = $4
        LIMIT 1`,
-      [item.employeeId, monthStart, item.revision, item.contentHash, input.documentRef, input.keyId],
+      [item.employeeId, monthStart, input.half, item.revision, item.contentHash, input.documentRef, input.keyId],
     );
     result.accepted.push({ employee_id: item.employeeId, state_revision: item.revision, acked_at: saved[0]?.acked_at ?? '' });
   }
@@ -203,13 +216,14 @@ export const ackStaffMonth = async (input: {
 
 export interface IZup3ExportCell {
   month: string;
+  half: StaffMonthHalf;
   state: StaffMonthExportState;
   acked_at: string | null;
   document_ref: string | null;
   computed_at: string | null;
 }
 
-/** Статусы для «Расчётов»: сотрудник → по месяцам, только чтение (без пересчёта). */
+/** Статусы для «Расчётов»: сотрудник → по месяцам и половинам, только чтение (без пересчёта). */
 export const loadZup3ExportStates = async (
   employeeIds: readonly number[],
   months: readonly string[],
@@ -218,28 +232,30 @@ export const loadZup3ExportStates = async (
   if (employeeIds.length === 0 || months.length === 0) return result;
   const monthStarts = months.map(month => `${month}-01`);
   const [states, acks] = await Promise.all([
-    query<IStateRow & { month: string }>(
-      `SELECT to_char(s.month, 'YYYY-MM') AS month, s.employee_id, r.state_revision, r.present, r.preliminary,
-              r.content_hash, to_char(r.computed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS computed_at
-         FROM staff_month_1c_states s
-         JOIN staff_month_1c_state_revisions r
-           ON r.employee_id = s.employee_id AND r.month = s.month AND r.state_revision = s.current_revision
+    query<IStateRow & { month: string; half: number }>(
+      `SELECT to_char(s.month, 'YYYY-MM') AS month, s.half, s.employee_id, r.state_revision, r.present, r.preliminary,
+              r.content_hash, ${ISO('r.computed_at')} AS computed_at
+         FROM staff_month_1c_half_states s
+         JOIN staff_month_1c_half_revisions r
+           ON r.employee_id = s.employee_id AND r.month = s.month AND r.half = s.half AND r.state_revision = s.current_revision
         WHERE s.employee_id = ANY($1::int[]) AND s.month = ANY($2::date[])`,
       [[...employeeIds], monthStarts],
     ),
-    query<IAckRow & { month: string }>(
-      `SELECT DISTINCT ON (employee_id, month) employee_id, to_char(month, 'YYYY-MM') AS month, state_revision,
-              to_char(acked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS acked_at, document_ref
-         FROM staff_month_1c_exports
+    query<IAckRow & { month: string; half: number }>(
+      `SELECT DISTINCT ON (employee_id, month, half) employee_id, to_char(month, 'YYYY-MM') AS month, half, state_revision,
+              ${ISO('acked_at')} AS acked_at, document_ref
+         FROM staff_month_1c_half_exports
         WHERE employee_id = ANY($1::int[]) AND month = ANY($2::date[])
-        ORDER BY employee_id, month, state_revision DESC`,
+        ORDER BY employee_id, month, half, state_revision DESC`,
       [[...employeeIds], monthStarts],
     ),
   ]);
-  const ackOf = new Map(acks.map(row => [`${Number(row.employee_id)}|${row.month}`, row]));
+  const keyOf = (employeeId: number, month: string, half: number): string => `${employeeId}|${month}|${half}`;
+  const ackOf = new Map(acks.map(row => [keyOf(Number(row.employee_id), row.month, Number(row.half)), row]));
   for (const row of states) {
     const employeeId = Number(row.employee_id);
-    const ack = ackOf.get(`${employeeId}|${row.month}`);
+    const half = Number(row.half) as StaffMonthHalf;
+    const ack = ackOf.get(keyOf(employeeId, row.month, half));
     const state = staffMonthExportState(toState(row), ack ? {
       revision: Number(ack.state_revision), ackedAt: ack.acked_at, documentRef: ack.document_ref,
     } : undefined);
@@ -247,12 +263,13 @@ export const loadZup3ExportStates = async (
     const list = result.get(employeeId) ?? [];
     list.push({
       month: row.month,
+      half,
       state,
       acked_at: ack?.acked_at ?? null,
       document_ref: ack?.document_ref ?? null,
       computed_at: row.computed_at ?? null,
     });
-    result.set(employeeId, list.sort((a, b) => a.month.localeCompare(b.month)));
+    result.set(employeeId, list.sort((a, b) => a.month.localeCompare(b.month) || a.half - b.half));
   }
   return result;
 };

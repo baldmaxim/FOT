@@ -6,7 +6,11 @@
  *  - факт закрытых дней = отработанные дни согласованных редакций (независимый SQL);
  *  - объект и категория = путь «Свода» (loadMonthBreakdown → attributeMonths → resolveSummaryObjects);
  *  - объект бригады = основной объект подач бригады (loadDepartmentMonthBreakdown, без «Не определён»);
- *  - время сборки, память, размер самого большого ответа (days=1, limit=500).
+ *  - половины месяца (1–15, 16–конец): состав, готовые / не готовые, Σ двух половин = месяц (часы и объекты у каждого
+ *    сотрудника), норма половины = Σ плановых часов, объекты половины = Σ строк половины;
+ *  - объект табелирования: по режимам и сколько из них по отделу (legacy) — той же функцией разрешения режима
+ *    (resolveExportModes с месяцем), что API, на той же выборке сотрудников; где он не совпадает с объектом месяца;
+ *  - время сборки, память (снимок с половинами), размер самого большого ответа (days=1, limit=500).
  *
  *   npx tsx scripts/check-staff-month-api.ts --month 2026-10
  */
@@ -39,6 +43,8 @@ async function main(): Promise<void> {
     '../src/services/payroll/payroll-staff-category.js');
   const attr = await load<typeof import('../src/services/payroll/payroll-summary.attribution.js')>(
     '../src/services/payroll/payroll-summary.attribution.js');
+  const modes = await load<typeof import('../src/services/timesheet-export-mode.service.js')>(
+    '../src/services/timesheet-export-mode.service.js');
 
   const bounds = loader.monthBoundsOf(month);
   const rssBefore = process.memoryUsage().rss;
@@ -171,6 +177,58 @@ async function main(): Promise<void> {
   }
   const sample = snapshot.brigades.find(item => item.name.startsWith('бр.Амонов М.Н'));
 
+  // 5. Половины месяца.
+  const halvesReport: Record<string, unknown> = {};
+  let halfProblems = 0;
+  const halfNote = (text: string): void => { halfProblems += 1; note(text); };
+  for (const half of [1, 2] as const) {
+    const view = snapshot.halves[half];
+    const totals = new Map<string, number>();
+    for (const row of view.rows) {
+      const days = row.days.reduce((sum, day) => sum + centi(day.hours), 0);
+      const objects = row.objects.reduce((sum, item) => sum + centi(item.hours), 0);
+      if (days !== centi(row.hours) || objects !== centi(row.hours)) halfNote(`${half}: ${row.employee_id} дни ${days / 100}, объекты ${objects / 100}, итог ${row.hours}`);
+      if (row.norm.complete && row.norm.hours !== null) {
+        const plan = row.days.reduce((sum, day) => sum + centi(day.plan_hours ?? 0), 0);
+        if (plan !== centi(row.norm.hours)) halfNote(`${half}: ${row.employee_id} норма ${row.norm.hours} ≠ Σ плановых ${plan / 100}`);
+      }
+      for (const item of row.objects) totals.set(item.object.key, (totals.get(item.object.key) ?? 0) + centi(item.hours));
+    }
+    for (const item of view.objects) {
+      if ((totals.get(item.object.key) ?? 0) !== centi(item.hours)) halfNote(`${half}: объект ${item.object.name} ${item.hours} ≠ Σ строк`);
+    }
+    halvesReport[String(half)] = {
+      bounds: view.bounds,
+      employees: view.rows.length,
+      ready: view.rows.filter(row => !row.preliminary).length,
+      not_ready: view.rows.filter(row => row.preliminary).length,
+      by_object_source: view.rows.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.object_source]: (acc[row.object_source] ?? 0) + 1 }), {}),
+      brigades: view.brigades.length,
+      objects: view.objects.length,
+      hours_total: Math.round(view.rows.reduce((sum, row) => sum + row.hours, 0) * 100) / 100,
+    };
+  }
+  const halfOf = (half: 1 | 2) => new Map(snapshot.halves[half].rows.map(row => [row.employee_id, row]));
+  const [firstHalf, secondHalf] = [halfOf(1), halfOf(2)];
+  for (const row of snapshot.rows) {
+    const parts = [firstHalf.get(row.employee_id), secondHalf.get(row.employee_id)].filter(Boolean);
+    if (parts.length === 0) halfNote(`${row.employee_id}: нет ни в одной половине`);
+    const hours = parts.reduce((sum, part) => sum + centi(part!.hours), 0);
+    if (hours !== centi(row.hours)) halfNote(`${row.employee_id}: половины ${hours / 100} ≠ месяц ${row.hours}`);
+    const byKey = new Map<string, number>();
+    for (const part of parts) for (const item of part!.objects) byKey.set(item.object.key, (byKey.get(item.object.key) ?? 0) + centi(item.hours));
+    for (const item of row.objects) {
+      if ((byKey.get(item.object.key) ?? 0) !== centi(item.hours)) halfNote(`${row.employee_id}: ${item.object.name} половины ≠ месяц`);
+    }
+  }
+
+  // 6. Объект табелирования — та же функция разрешения режима месяца, что в API, на той же выборке.
+  const resolved = await modes.resolveExportModes(ids, undefined, { month });
+  const byMode = snapshot.rows.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.timesheet_object.mode]: (acc[row.timesheet_object.mode] ?? 0) + 1 }), {});
+  const legacy = snapshot.rows.filter(row => resolved.get(row.employee_id)?.source !== 'employee_explicit');
+  const legacyByMode = legacy.reduce<Record<string, number>>((acc, row) => ({ ...acc, [row.timesheet_object.mode]: (acc[row.timesheet_object.mode] ?? 0) + 1 }), {});
+  const pinnedDiff = snapshot.rows.filter(row => row.timesheet_object.object && row.timesheet_object.object.key !== row.object.key);
+
   const liveRows = snapshot.rows.filter(row => row.days.some(day => day.source === 'live'));
   // Живые дни, отданные как окончательные (прошлый месяц вне подач): кто это — для разбора.
   const liveFinal = liveRows.filter(row => !row.preliminary).map(row => ({
@@ -205,6 +263,16 @@ async function main(): Promise<void> {
     category_vs_svod_without_live: categoryDiff,
     brigade_object_vs_submissions: brigadeDiff,
     sample_brigade: sample ? { name: sample.name, object: sample.object?.name, objects: sample.objects.map(item => `${item.object.name} ${item.hours}`) } : null,
+    halves: halvesReport,
+    half_problems: halfProblems,
+    halves_rows_json_mb: Math.round((JSON.stringify(snapshot.halves[1].rows).length + JSON.stringify(snapshot.halves[2].rows).length) / 2 ** 20 * 10) / 10,
+    timesheet_object: {
+      by_mode: byMode,
+      legacy: legacy.length,
+      legacy_by_mode: legacyByMode,
+      differs_from_month_object: pinnedDiff.length,
+      differs_sample: pinnedDiff.slice(0, 10).map(row => `${row.employee_id} ${row.full_name}: табелирования ${row.timesheet_object.object?.name}, месяца ${row.object.name} (${row.object_source})`),
+    },
     live_final: liveFinal,
     problems,
   }, null, 2));

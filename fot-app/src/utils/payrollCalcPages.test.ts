@@ -82,7 +82,7 @@ describe('подмешивание столбцов ФОТ', () => {
   });
 
   it('статус выгрузки в ЗУП3 приходит с порцией и ложится в строку; старый бэкенд без поля — строки без статуса', () => {
-    const cell = { month: '2026-09', state: 'exported' as const, acked_at: '2026-10-20T10:00:00Z', document_ref: 'ЗУП-1', computed_at: null };
+    const cell = { month: '2026-09', half: 1 as const, state: 'exported' as const, acked_at: '2026-10-20T10:00:00Z', document_ref: 'ЗУП-1', computed_at: null };
     const merge = mergeCalcColumns(rows, requests, [
       { status: 'success', result: { available: true, rows: [{ employee_id: 1, calc: calc('10.00'), zup3_export: [cell] }, { employee_id: 2, calc: null }] } },
       success([{ employee_id: 3, calc: calc('5.00') }]),

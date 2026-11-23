@@ -1,6 +1,7 @@
 /**
  * API для ЗУП3 «сотрудники месяца» — сборка снимка месяца из дней (staff-month-1c.load.ts) внутри одной транзакции
- * только для чтения: норма и вид дня по графику, объект и категория — функциями «Свода», бригады, справочник объектов.
+ * только для чтения: норма и вид дня по графику, объект и категория — функциями «Свода», объект табелирования, бригады,
+ * справочник объектов и обе половины месяца (staff-month-1c.half.ts).
  */
 import { randomUUID } from 'node:crypto';
 
@@ -23,18 +24,28 @@ import {
 } from './timesheet-department-assignments.service.js';
 import { loadClosedFingerprint, loadMonthDays, type IMonthBounds } from './staff-month-1c.load.js';
 import {
+  brigadeList,
+  brigadeObjectOf,
+  buildStaffMonthHalves,
+  summarizeObjects,
+  type IStaffMonthHalfView,
+  type StaffMonthObjectIndex,
+} from './staff-month-1c.half.js';
+import {
   aggregateBrigades,
   aggregateFact,
   fromCenti,
   objectHoursList,
   OFFICE_OBJECT,
   pickEmployeeBrigade,
-  pickMainKnownKey,
+  timesheetObjectOf,
   UNKNOWN_OBJECT,
   type IApiObject,
   type IBrigadeDayShare,
   type IDayRecord,
+  type IStaffMonthTimesheetObject,
   type StaffMonthCategory,
+  type StaffMonthHalf,
   type StaffMonthObjectSource,
 } from './staff-month-1c.rules.js';
 
@@ -68,6 +79,8 @@ export interface IStaffMonthRow {
   is_worker: boolean;
   object: IApiObject;
   object_source: StaffMonthObjectSource;
+  /** Объект табелирования месяца: прошедший — из фиксации, текущий — на сегодня. */
+  timesheet_object: IStaffMonthTimesheetObject;
   objects: Array<{ object: IApiObject; hours: number }>;
   hours: number;
   norm: IStaffMonthNorm;
@@ -104,12 +117,14 @@ export interface IStaffMonthSnapshot {
   preliminary: boolean;
   rows: IStaffMonthRow[];
   /** Для отбора: основной объект и факт по объектам, по employee_id. */
-  index: Map<number, { mainKey: string; factByObject: Map<string, number> }>;
+  index: StaffMonthObjectIndex;
   brigades: IStaffMonthBrigade[];
   objects: IStaffMonthObject[];
+  /** Половины месяца: 1–15 и 16–конец. */
+  halves: Record<StaffMonthHalf, IStaffMonthHalfView>;
   meta: { duplicate_days: number; object_config_errors: number; objects_not_frozen: number };
-  /** Ревизия и хеш каждой строки — после записи состояний (staff-month-1c.export-state.ts). */
-  exportRows?: Map<number, { revision: number; contentHash: string }>;
+  /** Ревизия и хеш строк каждой половины — после записи состояний (staff-month-1c.export-state.ts). */
+  exportRows?: Map<StaffMonthHalf, Map<number, { revision: number; contentHash: string }>>;
 }
 
 const rowsOf = async <T>(exec: DbExecutor, sql: string, params: unknown[]): Promise<T[]> => (
@@ -274,15 +289,16 @@ export const buildStaffMonthSnapshot = async (
   }
   const brigadeAggregates = aggregateBrigades(shares);
   timing?.mark('brigades');
-  const brigadeObject = (departmentId: string): IApiObject | null => {
-    const key = pickMainKnownKey(brigadeAggregates.get(departmentId)?.byObject ?? new Map(), loaded.objects);
-    return key ? apiObject(key, key) : null;
+  const brigadeObject = brigadeObjectOf(brigadeAggregates, loaded.objects, apiObject);
+  const lookupObject = (objectId: string): { object: IApiObject; address: string | null } | null => {
+    const skud = loaded.skudObjects.get(objectId);
+    return skud ? { object: apiObject(objectId, skud.name), address: skud.alt_name } : null;
   };
 
   const assignmentsBy = new Map<number, IEmploymentAssignment[]>();
   for (const row of assignments) assignmentsBy.set(Number(row.employee_id), [...(assignmentsBy.get(Number(row.employee_id)) ?? []), row]);
   const dates = listDates(bounds.start, bounds.end);
-  const index = new Map<number, { mainKey: string; factByObject: Map<string, number> }>();
+  const index: StaffMonthObjectIndex = new Map();
   let notFrozen = 0;
   let configErrors = 0;
   const rows: IStaffMonthRow[] = ids.map((id, position) => {
@@ -321,6 +337,7 @@ export const buildStaffMonthSnapshot = async (
       is_worker: categories[position] === 'worker',
       object,
       object_source: objectSource,
+      timesheet_object: timesheetObjectOf(attribution.get(key)?.mode, lookupObject),
       objects: objectHoursList(fact.factByObject, loaded.objects),
       hours: fromCenti(fact.factCenti),
       norm: {
@@ -334,7 +351,8 @@ export const buildStaffMonthSnapshot = async (
         },
       },
       brigade: brigadeId ? { department_id: brigadeId, name: departmentName.get(brigadeId) ?? '', object: brigadeObject(brigadeId) } : null,
-      preliminary: fact.preliminary,
+      // Текущий месяц не закончился — данные месяца ещё изменятся, даже если прошедшие дни закрыты.
+      preliminary: bounds.open || fact.preliminary,
       object_config_error: configError,
       object_frozen: fact.frozen,
       days: dates.map((date): IStaffMonthDay => {
@@ -358,42 +376,20 @@ export const buildStaffMonthSnapshot = async (
     };
   });
 
-  const brigades: IStaffMonthBrigade[] = brigadeIds.filter(id => brigadeAggregates.has(id)).map(departmentId => {
-    const aggregate = brigadeAggregates.get(departmentId)!;
-    return {
-      department_id: departmentId,
-      name: departmentName.get(departmentId) ?? '',
-      object: brigadeObject(departmentId),
-      objects: objectHoursList(aggregate.byObject, loaded.objects),
-      members: [...aggregate.members].sort(([a], [b]) => a - b).map(([employeeId, member]) => ({ employee_id: employeeId, hours: fromCenti(member.centi) })),
-    };
+  const brigades = brigadeList(brigadeIds, brigadeAggregates, id => departmentName.get(id) ?? '', brigadeObject, loaded.objects);
+  const objects = summarizeObjects(index, loaded.objects);
+  const halves = buildStaffMonthHalves({
+    bounds,
+    monthRows: rows,
+    dayRecords: loaded.days,
+    dict: loaded.objects,
+    breakdownOf: days => toBreakdownRows(days, loaded.objects),
+    shares,
+    brigadeIds,
+    departmentName,
+    apiObject,
   });
-
-  const objectStats = new Map<string, { fact: Set<number>; main: Set<number>; centi: number }>();
-  const stat = (key: string) => {
-    let entry = objectStats.get(key);
-    if (!entry) {
-      entry = { fact: new Set(), main: new Set(), centi: 0 };
-      objectStats.set(key, entry);
-    }
-    return entry;
-  };
-  for (const [id, item] of index) {
-    stat(item.mainKey).main.add(id);
-    for (const [key, centi] of item.factByObject) {
-      if (centi <= 0) continue;
-      stat(key).fact.add(id);
-      stat(key).centi += centi;
-    }
-  }
-  const objects: IStaffMonthObject[] = [...objectStats]
-    .map(([key, entry]) => ({
-      object: loaded.objects.get(key) ?? UNKNOWN_OBJECT,
-      employees_fact: entry.fact.size,
-      employees_main: entry.main.size,
-      hours: fromCenti(entry.centi),
-    }))
-    .sort((a, b) => a.object.name.localeCompare(b.object.name, 'ru') || a.object.key.localeCompare(b.object.key));
+  timing?.mark('halves');
 
   return {
     id: randomUUID(),
@@ -407,6 +403,7 @@ export const buildStaffMonthSnapshot = async (
     index,
     brigades,
     objects,
+    halves,
     meta: { duplicate_days: loaded.duplicateDays, object_config_errors: configErrors, objects_not_frozen: notFrozen },
   };
 };

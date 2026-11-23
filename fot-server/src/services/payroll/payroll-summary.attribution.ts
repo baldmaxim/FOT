@@ -34,7 +34,8 @@ export interface ISummaryBreakdownRow {
 /** Часы ниже порога — ноль, как в выгрузках для 1С. */
 const HOURS_EPSILON = 0.001;
 
-const isCurrentActivityAddress = (address: string | null | undefined): boolean => (
+/** Адрес объекта «Текущая деятельность» — группа «Офис». */
+export const isCurrentActivityAddress = (address: string | null | undefined): boolean => (
   (address ?? '').trim().toLocaleLowerCase('ru') === CURRENT_ACTIVITY_ADDRESS.toLocaleLowerCase('ru')
 );
 

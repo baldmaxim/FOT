@@ -104,12 +104,14 @@ export interface IPayrollCalcColumns {
 }
 
 /** Ответ calcColumns: столбцы ФОТ по сотрудникам порции. */
-/** Статус выгрузки объектов и часов в ЗУП3 за месяц (сервер, staff-month-1c.export-state). */
+/** Статус выгрузки объектов и часов в ЗУП3 за половину месяца (сервер, staff-month-1c.export-state). */
 export type Zup3ExportState = 'not_ready' | 'ready' | 'exported' | 'changed';
 
 export interface IZup3ExportCell {
   /** YYYY-MM. */
   month: string;
+  /** Половина месяца: 1 — 1–15, 2 — 16–конец. */
+  half: 1 | 2;
   state: Zup3ExportState;
   /** Когда 1С подтвердила приём (ISO), документ 1С. */
   acked_at: string | null;
