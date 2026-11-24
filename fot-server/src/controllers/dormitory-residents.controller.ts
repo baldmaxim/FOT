@@ -9,6 +9,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
+import { PAGE_PATHS } from '../config/access-control.js';
 import { PAGE_KEY_HR_PROFILES } from '../config/hr-documents.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { auditService } from '../services/audit.service.js';
@@ -72,7 +73,8 @@ const monthQuerySchema = z.string({ required_error: 'Выберите месяц
 /**
  * GET /api/dormitory/residents[?month=YYYY-MM] — общежития (без служебных квартир): все записи охвата с историей;
  * сведения (паспорт, крайний проход, начальник участка) — у записей, задевающих месяц (нет — текущий: прежний клиент);
- * крайний проход — до конца месяца, не позже сегодня. Полный паспорт — с правом правки «Реквизитов».
+ * крайний проход — до конца месяца, не позже сегодня. Полный паспорт — с правом правки «Реквизитов» или «Проживания»
+ * (роль или личная галочка; 24.11.2026 — роль «Учёт проживания»).
  */
 const residents = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -84,7 +86,8 @@ const residents = async (req: AuthenticatedRequest, res: Response): Promise<void
     const stays = await listStaysOfClass('dormitory', await rosterEmployeeIds(req));
     const active = stays.filter(stay => stay.check_in <= monthEnd && (stay.check_out === null || stay.check_out > monthStart));
     const ids = active.map(stay => stay.employee_id);
-    const fullPassport = await resolveEffectivePageAccess(req, PAGE_KEY_HR_PROFILES, 'edit');
+    const fullPassport = await resolveEffectivePageAccess(req, PAGE_KEY_HR_PROFILES, 'edit')
+      || await resolveEffectivePageAccess(req, PAGE_PATHS.STAFF_CONTROL_DORMITORY, 'edit');
     const [passports, passes, supervisors] = await Promise.all([
       loadPassports(ids, { full: fullPassport }),
       loadLastPasses(ids, passUntil),

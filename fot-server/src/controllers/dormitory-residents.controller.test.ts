@@ -40,7 +40,7 @@ vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
 vi.mock('../services/staff-tab-access.service.js', () => grant);
 
-// Полный паспорт — с правом правки «Реквизитов».
+// Полный паспорт — с правом правки «Реквизитов» или «Проживания».
 const pageAccess = vi.hoisted(() => ({ resolveEffectivePageAccess: vi.fn() }));
 vi.mock('../services/access-control.service.js', () => pageAccess);
 
@@ -90,6 +90,9 @@ describe('«Общежитие» — жильцы', () => {
     const res = makeRes();
     await c.residents(makeReq(), res);
     expect(svc.listStaysOfClass).toHaveBeenCalledWith('dormitory', [42, 43]);
+    // Ни правки «Реквизитов», ни правки «Проживания» — последние 4 знака.
+    expect(pageAccess.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/staff-control/hr-profiles', 'edit');
+    expect(pageAccess.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/staff-control/dormitory', 'edit');
     expect(residentsSvc.loadPassports).toHaveBeenCalledWith([42], { full: false });
     expect(residentsSvc.loadLastPasses).toHaveBeenCalledWith([42], '2026-11-19');
     expect(residentsSvc.loadSupervisorLabels).toHaveBeenCalledWith([{ employee_id: 42, org_department_id: 'dep-1' }]);
@@ -108,6 +111,8 @@ describe('«Общежитие» — жильцы', () => {
     svc.listStaysOfClass.mockResolvedValue([STAY, past, later]);
     pageAccess.resolveEffectivePageAccess.mockResolvedValue(true);
     await c.residents(makeReq({ query: { month: '2026-10' } }), makeRes());
+    // Право «Реквизитов» решает само — правку «Проживания» не спрашиваем.
+    expect(pageAccess.resolveEffectivePageAccess).toHaveBeenCalledTimes(1);
     expect(pageAccess.resolveEffectivePageAccess).toHaveBeenCalledWith(expect.anything(), '/staff-control/hr-profiles', 'edit');
     expect(residentsSvc.loadPassports).toHaveBeenCalledWith([42, 44], { full: true });
     expect(residentsSvc.loadLastPasses).toHaveBeenCalledWith([42, 44], '2026-10-31');
@@ -115,6 +120,15 @@ describe('«Общежитие» — жильцы', () => {
     const bad = makeRes();
     await c.residents(makeReq({ query: { month: '2026-13' } }), bad);
     expect(bad.statusCode).toBe(400);
+  });
+
+  it('правка «Проживания» без правки «Реквизитов» — полный паспорт (роль «Учёт проживания», личная галочка)', async () => {
+    svc.listStaysOfClass.mockResolvedValue([STAY]);
+    pageAccess.resolveEffectivePageAccess.mockImplementation(async (_req: unknown, page: string, action: string) => (
+      page === '/staff-control/dormitory' && action === 'edit'
+    ));
+    await c.residents(makeReq(), makeRes());
+    expect(residentsSvc.loadPassports).toHaveBeenCalledWith([42], { full: true });
   });
 
   it('галочка «Проживание» — вся организация', async () => {

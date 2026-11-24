@@ -32,7 +32,7 @@ export interface IResidentVacation {
 
 const uniqueIds = (ids: readonly number[]): number[] => [...new Set(ids.filter(id => Number.isInteger(id) && id > 0))];
 
-/** Паспорт: full — полный номер (право правки «Реквизитов»), иначе последние 4 знака (••••••3158). */
+/** Паспорт: full — полный номер (право правки «Реквизитов» или «Проживания»), иначе последние 4 знака (••••••3158). */
 export const loadPassports = async (
   employeeIds: readonly number[],
   { full }: { full: boolean },

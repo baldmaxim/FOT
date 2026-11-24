@@ -254,7 +254,7 @@ const DORMITORY_PLACE_COLUMN: IRegistryColumn<IDormitoryResident> = {
 
 /**
  * Как отчёт 1С «Проживающие в общежитии последний вход (СКД)»; «Все общежития» — плюс столбец «Общежитие». Месяц
- * (20.11.2026) — плюс «Дата въезда», «Дата выезда» и «Комментарий»; паспорт — полный с правом «Реквизитов».
+ * (20.11.2026) — плюс «Дата въезда», «Дата выезда» и «Комментарий»; паспорт — полный с правкой «Реквизитов» или «Проживания».
  */
 export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IRegistryColumn<IDormitoryResident>> => [
   {

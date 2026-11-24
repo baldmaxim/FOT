@@ -101,7 +101,7 @@ export interface IApartmentsData {
 
 /** Жилец общежития: сведения — только у записей, задевающих выбранный месяц. */
 export interface IDormitoryResident extends IDormitoryStay {
-  /** Полный номер — с правом правки «Реквизитов», иначе последние 4 знака. */
+  /** Полный номер — с правом правки «Реквизитов» или «Проживания», иначе последние 4 знака. */
   passport: string | null;
   /** YYYY-MM-DDTHH:MM:SS по Москве. */
   last_pass_at: string | null;
