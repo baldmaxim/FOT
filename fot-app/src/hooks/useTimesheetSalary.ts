@@ -29,13 +29,12 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
     placeholderData: previous => (previous?.department_id === departmentId && previous?.month === month ? previous : undefined),
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['timesheet-salary', departmentId ?? 'none', month] });
-
   const ktuMutation = useMutation({
     mutationFn: ({ employeeId, ktu }: { employeeId: number; ktu: number }) => (
       timesheetSalaryService.setKtu(departmentId as string, month, employeeId, ktu)
     ),
-    onSuccess: invalidate,
+    // Новый КТУ — во всех объектах, «Расчётах», «Своде» и сводке «Объекты» (выбор КТУ снимает вписанные доли).
+    onSuccess: () => invalidateBrigadeOutputs(queryClient),
     onError: error => toast.error(errorMessage(error, 'Не удалось сохранить КТУ')),
   });
 
@@ -43,7 +42,7 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
     mutationFn: ({ objectKey, amount }: { objectKey: string; amount: number | null }) => (
       timesheetSalaryService.setObjectOutput(departmentId as string, month, objectKey, amount)
     ),
-    // Выработка видна и в списке «Бригады» — перечитать и его.
+    // Выработка видна и в списке «Бригады», «Расчётах» и «Своде» — перечитать и их.
     onSuccess: () => invalidateBrigadeOutputs(queryClient),
     onError: error => {
       toast.error(errorMessage(error, 'Не удалось сохранить выработку'));
@@ -55,7 +54,7 @@ export const useTimesheetSalary = ({ departmentId, month, enabled }: IUseTimeshe
     mutationFn: ({ objectKey, employeeId, amount }: { objectKey: string; employeeId: number; amount: number | null }) => (
       timesheetSalaryService.setShare(departmentId as string, month, objectKey, employeeId, amount)
     ),
-    onSuccess: invalidate,
+    onSuccess: () => invalidateBrigadeOutputs(queryClient),
     // Текст сервера: «Амонов А. М.: максимум — 196 428,57 (КТУ 2,2)».
     onError: error => toast.error(errorMessage(error, 'Не удалось сохранить долю')),
   });

@@ -7,7 +7,9 @@
  *  - fixed — все дни месяца в утверждённых закрытых подачах: результат считается по их редакциям и
  *    сохраняется в brigade_salary_results. Пересчёт — только при новой редакции или новых
  *    выработке/КТУ; правка графика задним числом сумму не меняет;
- *  - stale — результат был, но подачу открыли: показываем прежние суммы с пометкой.
+ *  - stale — месяц был зафиксирован, но подачу открыли: считаем, как preliminary, по живому табелю и текущему вводу
+ *    (КТУ, выработка, «Доли») — с пометкой «Требует перерасчёта». Прежний снимок не показываем: после смены КТУ в нём
+ *    осталось бы старое значение при новом в столбце КТУ («Расчёты» такой месяц тоже считают по живому табелю).
  *
  * Фиксация — при чтении, под advisory-lock на (бригада, месяц): закрытие табеля этот расчёт не
  * вызывает, поэтому ошибка зарплаты не мешает закрыть табель и отдать его в 1С.
@@ -77,6 +79,7 @@ import {
   type IDateRange,
 } from './brigade-salary-source.service.js';
 
+/** stale — был зафиксирован, табель снова открыт: считается по текущему табелю, как preliminary, с пометкой. */
 export type BrigadeSalaryState = 'preliminary' | 'fixed' | 'stale';
 
 /** Ключ псевдо-объекта «Текущая деятельность» — как CURRENT_ACTIVITY_KEY разбивки. */
@@ -153,7 +156,7 @@ interface IStoredBrigadeResult extends IBrigadeComputation {
 
 export interface IBrigadeSalaryComputed {
   state: BrigadeSalaryState;
-  /** По какой выработке посчитаны показанные доли (у stale — по сохранённой). */
+  /** По какой выработке посчитаны показанные доли: у fixed — по сохранённой, у открытого месяца — по текущему вводу. */
   mode: BrigadeOutputMode;
   /** Выработка, по которой посчитаны показанные доли (сумма бригаде или Σ по объектам); null — не внесена. */
   output_amount: string | null;
@@ -478,6 +481,16 @@ const toStoredResult = (row: Record<string, unknown>): IStoredBrigadeResult => {
   };
 };
 
+/** Месяц бригады уже фиксировали (результат format 2 есть): открытый такой месяц — «Требует перерасчёта». */
+async function hasStoredResult(departmentId: string, monthStart: string): Promise<boolean> {
+  const found = await query<{ found: number }>(
+    `SELECT 1 AS found FROM brigade_salary_results
+      WHERE department_id = $1 AND month = $2::date AND format = $3 LIMIT 1`,
+    [departmentId, monthStart, BRIGADE_RESULT_FORMAT],
+  );
+  return found.length > 0;
+}
+
 async function loadStoredResult(
   departmentId: string,
   monthStart: string,
@@ -799,9 +812,9 @@ export async function computeBrigadePreliminaryShares(
 }
 
 /**
- * Расчёт бригады для вкладки: закрытый месяц — зафиксированный (целиком из сохранённого), открытый — прежний
- * расчёт format 2 с пометкой или предварительный. Старый результат (format 1, без объектов) не показывается:
- * открытый месяц с ним считается предварительно.
+ * Расчёт бригады для вкладки: закрытый месяц — зафиксированный (целиком из сохранённого), открытый — по живому табелю и
+ * текущему вводу; если месяц уже фиксировали (format 2), то с пометкой stale. Старый результат (format 1, без объектов)
+ * пометки не даёт: такой открытый месяц — просто предварительный.
  */
 export async function getBrigadeSalary(
   req: AuthenticatedRequest,
@@ -810,12 +823,12 @@ export async function getBrigadeSalary(
 ): Promise<IBrigadeSalaryComputed> {
   const { start } = monthBounds(month);
   const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month), month);
-  const supervisors = await supervisorIds(departmentId);
-  const currentMembers = (await listBrigadeMemberIds(departmentId, month)).filter(id => !supervisors.has(id));
 
   if (closure.closed) {
     const fixed = await ensureFixed(req, departmentId, month);
     if (fixed) {
+      const supervisors = await supervisorIds(departmentId);
+      const currentMembers = (await listBrigadeMemberIds(departmentId, month)).filter(id => !supervisors.has(id));
       return {
         state: 'fixed',
         mode: fixed.stored.mode,
@@ -834,30 +847,14 @@ export async function getBrigadeSalary(
     }
   }
 
+  // Открытый месяц — по живому табелю и текущему вводу. Уже фиксированный, но снова открытый — так же, с пометкой stale:
+  // новый КТУ сразу во всех объектах и суммах, а не только в столбце КТУ. Снимок при этом не трогаем.
   const inputs = await loadBrigadeSalaryInputs(departmentId, start);
-  const stored = await loadStoredResult(departmentId, start);
-  if (stored && stored.format === BRIGADE_RESULT_FORMAT) {
-    return {
-      state: 'stale',
-      mode: stored.mode,
-      output_amount: stored.output_amount,
-      distribution: stored.distribution,
-      as_of: null,
-      open_ranges: closure.open_ranges,
-      errors: stored.errors,
-      computed_at: stored.computed_at,
-      rows: stored.rows,
-      objects: stored.objects,
-      share_conflicts: stored.share_conflicts,
-      inputs,
-      member_ids: currentMembers,
-    };
-  }
-
+  const reopened = await hasStoredResult(departmentId, start);
   const asOf = resolvePreliminaryAsOf(month);
   const { computation, memberIds } = await computePreliminary(departmentId, month, asOf, inputs);
   return {
-    state: 'preliminary',
+    state: reopened ? 'stale' : 'preliminary',
     mode: computation.mode,
     output_amount: totalBrigadeOutput(inputs),
     distribution: computation.distribution,

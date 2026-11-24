@@ -306,7 +306,7 @@ export async function getTimesheetSalary(
   const canEditKtu = await resolveBrigadeKtuEditPredicate(req, level);
   const members = new Set(result.member_ids);
   const byEmployee = new Map(result.rows.map(row => [row.employee_id, row]));
-  // Вписанные доли — текущий ввод (у stale расчёт старый, а поле должно показать то, что вписали). Только своего режима.
+  // Вписанные доли — текущий ввод (поле показывает то, что вписали, и при конфликте). Только своего режима.
   const mode = brigadeOutputMode(result.inputs);
   const fixedInput = new Map([...(result.inputs.fixedShares ?? [])]
     .filter(([key]) => (mode === 'brigade') === (key === BRIGADE_WHOLE_SHARE_KEY)));

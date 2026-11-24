@@ -330,6 +330,37 @@ describe('buildBrigadeObjectDistribution', () => {
     expect(Object.fromEntries(result.totals)).toEqual({ 1: 40000n, 2: 90000n, 3: 20000n });
   });
 
+  it('КТУ 1,0 → 1,4 у рабочего на трёх объектах: новый КТУ на каждом объекте, Σ объекта — ровно выработка; вернули — как было', () => {
+    // Рабочий 2 — на всех трёх объектах; 1 и 3 — по одному-два.
+    const crew = (ktu: number) => [
+      { employee_id: 1, ktu_tenths: 10, byObject: new Map([['wave', 9000], ['stories', 3000]]) },
+      { employee_id: 2, ktu_tenths: ktu, byObject: new Map([['wave', 3300], ['stories', 660], ['metro', 13800]]) },
+      { employee_id: 3, ktu_tenths: 10, byObject: new Map([['metro', 12000], ['stories', 4000]]) },
+    ];
+    const outputs = new Map([['wave', 30000000n], ['stories', 10000000n], ['metro', 15000000n]]);
+    const before = buildBrigadeObjectDistribution(outputs, crew(10), []);
+    const after = buildBrigadeObjectDistribution(outputs, crew(14), []);
+    expect(after.state).toBe('ok');
+
+    for (const key of outputs.keys()) {
+      const was = before.objects.get(key)!.amounts!;
+      const now = after.objects.get(key)!.amounts!;
+      // Вес рабочего на объекте — 14 × его минуты: Σ весов выросла ровно на 4 × минуты.
+      const minutes = crew(14)[1].byObject.get(key)!;
+      expect(after.objects.get(key)!.total_weight - before.objects.get(key)!.total_weight).toBe(4 * minutes);
+      // Его доля выросла на каждом объекте, у остальных там — уменьшилась.
+      expect(now.get(2)!).toBeGreaterThan(was.get(2)!);
+      for (const [employeeId, amount] of now) if (employeeId !== 2) expect(amount).toBeLessThan(was.get(employeeId)!);
+      // Σ долей объекта — ровно выработка, до копейки.
+      expect([...now.values()].reduce((sum, amount) => sum + amount, 0n)).toBe(outputs.get(key));
+    }
+    // Итог — Σ его долей по объектам.
+    const shares = [...outputs.keys()].map(key => after.objects.get(key)!.amounts!.get(2)!);
+    expect(after.totals.get(2)).toBe(shares.reduce((sum, amount) => sum + amount, 0n));
+    // Вернули 1,0 — те же суммы, что были.
+    expect(buildBrigadeObjectDistribution(outputs, crew(10), [])).toEqual(before);
+  });
+
   it('на объекте с минутами выработка не внесена — итог null только у работавших там; общий — no_output', () => {
     const result = buildBrigadeObjectDistribution(new Map([['wave', 100000n]]), members, []);
     expect(result.state).toBe('no_output');

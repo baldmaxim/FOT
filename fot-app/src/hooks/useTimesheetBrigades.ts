@@ -1,21 +1,16 @@
 import { useCallback } from 'react';
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
 import { timesheetSalaryService } from '../services/timesheetSalaryService';
-
-/** Ключ списка вкладки «Бригады». */
-export const BRIGADE_OUTPUTS_QUERY_KEY = 'timesheet-salary-brigades';
+import { BRIGADE_OUTPUTS_QUERY_KEY, invalidateBrigadeOutputs } from '../utils/brigadeSalaryCache';
 
 /**
- * Выработку правят и «Бригады», и «Зарплата по объектам»: после правки — и после 409 (кто-то уже внёс выработку
- * другим способом) — перечитать обе.
+ * Выработку, КТУ и «Долю» правят и «Бригады», и «Зарплата по объектам»: после правки — и после 409 (кто-то уже внёс
+ * выработку другим способом) — перечитать всё, где видны доли бригады (invalidateBrigadeOutputs).
  */
-export const invalidateBrigadeOutputs = (queryClient: QueryClient): Promise<unknown> => Promise.all([
-  queryClient.invalidateQueries({ queryKey: ['timesheet-salary'] }),
-  queryClient.invalidateQueries({ queryKey: [BRIGADE_OUTPUTS_QUERY_KEY] }),
-]);
+export { BRIGADE_OUTPUTS_QUERY_KEY, invalidateBrigadeOutputs };
 
 /** 409 «или — или»: выработка уже внесена другим способом. */
 export const isOutputModeConflict = (error: unknown): boolean => error instanceof ApiError && error.status === 409;

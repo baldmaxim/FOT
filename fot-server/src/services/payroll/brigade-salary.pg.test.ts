@@ -157,6 +157,8 @@ import {
   peekBrigadeShares,
   peekBrigadeSharesMany,
   previewClosedBrigadeShares,
+  computeBrigadePreliminaryShares,
+  type IBrigadeSalaryComputed,
 } from './brigade-salary.service.js';
 import {
   BrigadeOutputModeConflictError,
@@ -709,17 +711,55 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(await q('SELECT 1 FROM brigade_salary_results')).toHaveLength(0);
   });
 
-  it('открыли подачу → «Требует перерасчёта» с прежними суммами и днями; новая редакция после закрытия → пересчёт и аудит', async () => {
+  /**
+   * Живой табель А и Б — как в редакциях, плюс у А день 17.09 на Stories (в редакции его ещё нет). Wave: А 6000,
+   * Б 10 800, уволенный 6000 — как в снимке; Stories: А 12 000, Б 2400 → 84 000 = 70 000 / 14 000.
+   */
+  const liveAsVersionsPlusDay = () => {
+    const day = (hours: number, overridden = false) => (
+      { status: 'work', hours, corrected: overridden, hoursOverridden: overridden }
+    );
+    fx.live.set(A, new Map([['2026-09-01', day(12)], ['2026-09-16', day(10)], ['2026-09-17', day(10)]]));
+    fx.live.set(B, new Map([['2026-09-01', day(10)], ['2026-09-16', day(12, true)]]));
+    fx.entries.push(
+      { employee_id: A, work_date: '2026-09-01', object_key: WAVE, hours: 12 },
+      { employee_id: A, work_date: '2026-09-16', object_key: STORIES, hours: 10 },
+      { employee_id: A, work_date: '2026-09-17', object_key: STORIES, hours: 10 },
+      { employee_id: B, work_date: '2026-09-01', object_key: WAVE, hours: 6 },
+      { employee_id: B, work_date: '2026-09-01', object_key: STORIES, hours: 4 },
+      { employee_id: B, work_date: '2026-09-16', object_key: WAVE, hours: 12 },
+    );
+  };
+
+  /** Сохранённый снимок как есть — чтение переоткрытого месяца его не меняет. */
+  const storedRow = async () => (await q<{ row: unknown }>(
+    'SELECT to_jsonb(r) AS row FROM brigade_salary_results r WHERE department_id = $1', [BRIGADE],
+  ))[0]?.row;
+
+  it('открыли подачу → «Требует перерасчёта» по живому табелю и текущему вводу, снимок не тронут; закрыли → пересчёт и аудит', async () => {
     const { h2 } = await closeSeptemberInHalves();
     await enterBoth();
-    await getBrigadeSalary(req, BRIGADE, '2026-09');
+    liveAsVersionsPlusDay();
+    const fixed = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(amounts(fixed.rows)).toEqual({ [A]: '120000.00', [B]: '132000.00', [F]: '60000.00' });
+    const snapshot = await storedRow();
 
     await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
     const stale = await getBrigadeSalary(req, BRIGADE, '2026-09');
     expect(stale.state).toBe('stale');
-    expect(amounts(stale.rows)[A]).toBe('120000.00');
-    expect(stale.rows.find(row => row.employee_id === A)?.objects.length).toBe(2);
+    expect(stale.computed_at).toBeNull();
+    expect(stale.as_of).toBe('2026-09-30');
     expect(stale.open_ranges).toEqual([{ start_date: '2026-09-16', end_date: '2026-09-30' }]);
+    // Живой табель: день 17.09 у А уже в расчёте — не прежние суммы снимка.
+    expect(stale.rows.every(row => row.source === 'live')).toBe(true);
+    expect(amounts(stale.rows)).toEqual({ [A]: '130000.00', [B]: '122000.00', [F]: '60000.00' });
+    // Тот же расчёт, что у незакрытого месяца («Расчёты» и «Объекты»): по тем же входам.
+    const inputs = await loadBrigadeSalaryInputs(BRIGADE, '2026-09-01');
+    const context = (await loadBrigadeContexts([BRIGADE], '2026-09-01', '2026-09-30')).get(BRIGADE)!;
+    const preliminary = await computeBrigadePreliminaryShares(BRIGADE, '2026-09', '2026-09-30', inputs, context);
+    expect(stale.rows).toEqual(preliminary.rows);
+    expect(stale.objects).toEqual(preliminary.objects);
+    expect(await storedRow()).toEqual(snapshot);
 
     // Закрыли снова: у А добавился день на Stories.
     const v3 = await addVersion(h2, 2, payload({
@@ -738,6 +778,65 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(Number(amounts(recalculated.rows)[A])).toBeGreaterThan(120000);
     expect(audit.calls.map(call => call.action)).toEqual(['BRIGADE_SALARY_RECALCULATED']);
     expect(audit.calls[0].details.total).toEqual({ from: '312000.00', to: '312000.00' });
+  });
+
+  /**
+   * Новый КТУ — одно значение везде: КТУ строки = введённому (по нему столбец КТУ), вес каждой части = КТУ × минуты на
+   * объекте, Σ долей каждого объекта — ровно выработка.
+   */
+  const expectKtuEverywhere = (result: IBrigadeSalaryComputed, employeeId: number, tenths: number) => {
+    const row = result.rows.find(item => item.employee_id === employeeId)!;
+    expect(row.ktu).toBe((tenths / 10).toFixed(1));
+    expect(result.inputs.ktu.get(employeeId) ?? 10).toBe(tenths);
+    expect(row.objects.filter(part => part.counted_minutes > 0)).toHaveLength(2);
+    for (const part of row.objects) expect(part.weight).toBe(tenths * part.counted_minutes);
+    for (const object of result.objects.filter(item => item.output !== null)) {
+      const cents = result.rows.reduce((sum, item) => (
+        sum + Math.round(Number(item.objects.find(part => part.object_key === object.object_key)?.amount ?? 0) * 100)
+      ), 0);
+      expect(cents).toBe(Math.round(Number(object.output) * 100));
+    }
+  };
+  const objectAmountsOf = (result: IBrigadeSalaryComputed, employeeId: number) => Object.fromEntries(
+    result.rows.find(item => item.employee_id === employeeId)!.objects.map(part => [part.object_key, Number(part.amount)]),
+  );
+
+  it('КТУ 1,0 → 1,4 у А (Wave и Stories) — одно значение на всех объектах: открытый, закрытый и переоткрытый месяц', async () => {
+    const { h2 } = await closeSeptemberInHalves();
+    await enterBoth();
+    liveAsVersionsPlusDay();
+
+    // Открытый, ни разу не фиксированный месяц.
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    const openBefore = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(openBefore.state).toBe('preliminary');
+    expectKtuEverywhere(openBefore, A, 10);
+    await setBrigadeKtu(BRIGADE, '2026-09-01', A, 14, PROFILE);
+    const open = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expectKtuEverywhere(open, A, 14);
+    const grew = objectAmountsOf(open, A);
+    const was = objectAmountsOf(openBefore, A);
+    expect(grew[WAVE]).toBeGreaterThan(was[WAVE]);
+    expect(grew[STORIES]).toBeGreaterThan(was[STORIES]);
+
+    // Закрыли с 1,0 — снимок по 1,0; открыли снова и поставили 1,4 — сразу 1,4 на обоих объектах, не 1,0 снимка.
+    await setBrigadeKtu(BRIGADE, '2026-09-01', A, 10, PROFILE);
+    await q('UPDATE timesheet_approvals SET unlocked_at = NULL WHERE id = $1', [h2]);
+    const closed = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(closed.state).toBe('fixed');
+    expectKtuEverywhere(closed, A, 10);
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    await setBrigadeKtu(BRIGADE, '2026-09-01', A, 14, PROFILE);
+    const reopened = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(reopened.state).toBe('stale');
+    expectKtuEverywhere(reopened, A, 14);
+    expect(objectAmountsOf(reopened, A)).toEqual(grew);
+
+    // Закрыли снова — фиксация по 1,4 на обоих объектах.
+    await q('UPDATE timesheet_approvals SET unlocked_at = NULL WHERE id = $1', [h2]);
+    const refixed = await getBrigadeSalary(req, BRIGADE, '2026-09');
+    expect(refixed.state).toBe('fixed');
+    expectKtuEverywhere(refixed, A, 14);
   });
 
   it('старый результат (format 1, без объектов): подачу открыли — не отдаётся, считается предварительно; закрыта — пересчёт без пустого аудита', async () => {
