@@ -8,6 +8,9 @@
  * внесённой выработкой месяца — в том числе неактивные, чтобы её можно было увидеть и стереть.
  *
  * Долей здесь не считаем — два запроса на весь список; объекты бригады грузит раскрытие строки.
+ *
+ * includeInactive — и неактивные бригады с людьми в месяце (сводка «Бригады → Объекты»): бригаду закрыли позже, а часы на
+ * объектах в этом месяце у её людей были — без неё объект недосчитает людей и часы.
  */
 import { query } from '../../config/postgres.js';
 import { firedPortalEligibleSql } from '../timesheet-fired-cutoff.service.js';
@@ -29,6 +32,7 @@ export interface IBrigadeOutputListItem {
 export async function listBrigadeOutputs(
   month: string,
   readable: 'all' | readonly string[],
+  options: { includeInactive?: boolean } = {},
 ): Promise<IBrigadeOutputListItem[]> {
   if (readable !== 'all' && readable.length === 0) return [];
   const { start, end } = monthBounds(month);
@@ -77,10 +81,10 @@ export async function listBrigadeOutputs(
         AND (
           bo.department_id IS NOT NULL
           OR o.department_id IS NOT NULL
-          OR (COALESCE(d.is_active, true) AND EXISTS (SELECT 1 FROM people p WHERE p.department_id = d.id))
+          OR ((COALESCE(d.is_active, true) OR $4::boolean) AND EXISTS (SELECT 1 FROM people p WHERE p.department_id = d.id))
         )
       ORDER BY d.name, d.id`,
-    [start, end, readable === 'all' ? null : [...readable]],
+    [start, end, readable === 'all' ? null : [...readable], options.includeInactive === true],
   );
   return rows.map(row => ({
     department_id: row.department_id,

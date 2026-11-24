@@ -348,7 +348,9 @@ const brigadeObjects = async (req: AuthenticatedRequest, res: Response): Promise
 const objectsSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { month } = listQuerySchema.parse(req.query);
-    const brigades = await listBrigadeOutputs(month, await resolveBrigadeOutputDepartmentIds(req));
+    // И неактивные бригады с людьми в месяце: закрыли позже, а часы на объектах тогда были.
+    const readable = await resolveBrigadeOutputDepartmentIds(req);
+    const brigades = await listBrigadeOutputs(month, readable, { includeInactive: true });
     const canReadPeople = await resolveBrigadeSalaryReader(req, month);
     res.json({ success: true, data: await getBrigadeObjectsSummary(month, brigades, canReadPeople) });
   } catch (err) {

@@ -125,7 +125,7 @@ export const TimesheetBrigadesTab: FC<ITimesheetBrigadesTabProps> = ({ month, ca
           ))}
         </div>
         {view === 'brigades' && brigades && <span className={styles.count}>{visible.length} из {brigades.length}</span>}
-        {view === 'objects' && summary.data && (
+        {view === 'objects' && summary.data && !summary.loading && (
           <span className={styles.count}>{objectViews.length} из {summary.data.objects.length}</span>
         )}
         {view === 'brigades' ? (

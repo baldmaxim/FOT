@@ -376,7 +376,8 @@ describe('timesheetSalaryController.objectsSummary — «Бригады → Об
     const res = await getSummary({ month: '2026-11' });
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual({ month: '2026-11', objects: [], failed_brigades: [] });
-    expect(svc.listBrigadeOutputs).toHaveBeenCalledWith('2026-11', [BRIGADE_ID, OTHER]);
+    // И неактивные бригады с людьми в месяце — без них объект недосчитает людей и часы.
+    expect(svc.listBrigadeOutputs).toHaveBeenCalledWith('2026-11', [BRIGADE_ID, OTHER], { includeInactive: true });
     expect(svc.getBrigadeObjectsSummary).toHaveBeenCalledWith('2026-11', BRIGADES, expect.any(Function));
   });
 

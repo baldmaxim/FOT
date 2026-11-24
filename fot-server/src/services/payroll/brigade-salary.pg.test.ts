@@ -1004,6 +1004,11 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
       // Видимые отделы — только они.
       expect((await listBrigadeOutputs('2026-09', [MOVED_TO])).map(item => item.name)).toEqual(['бр.Новая']);
       expect(await listBrigadeOutputs('2026-09', [])).toEqual([]);
+      // Неактивная бригада с людьми, но без выработки: в «Бригадах» её нет, в сводке «Объекты» — есть.
+      await q('UPDATE org_departments SET is_active = false WHERE id = $1', [MOVED_TO]);
+      expect((await listBrigadeOutputs('2026-09', 'all')).map(item => item.name)).toEqual(['бр.Архив', 'бр.Аюби М.С.']);
+      expect((await listBrigadeOutputs('2026-09', 'all', { includeInactive: true })).map(item => item.name))
+        .toEqual(['бр.Архив', 'бр.Аюби М.С.', 'бр.Новая']);
     } finally {
       await q('DELETE FROM employee_assignments WHERE employee_id IN (9001)');
       await q('DELETE FROM employees WHERE id IN (9001, 9002, 9003)');
