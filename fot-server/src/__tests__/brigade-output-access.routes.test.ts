@@ -112,6 +112,8 @@ const OUTPUT_ROUTES: Array<['get' | 'put', string]> = [
   ['get', '/api/payroll/timesheet-salary'],
   ['get', '/api/payroll/timesheet-salary/brigades'],
   ['get', '/api/payroll/timesheet-salary/brigade-objects'],
+  // «Бригады → Объекты»: людей бригад сужает контроллер (как у полного расчёта).
+  ['get', '/api/payroll/timesheet-salary/objects-summary'],
   ['put', '/api/payroll/timesheet-salary/output'],
   ['put', '/api/payroll/timesheet-salary/object-output'],
   // КТУ и «Доля» (355) — галочке тоже: там же, где ей открыта «Зарплата по объектам» (сужает контроллер).
@@ -152,7 +154,7 @@ describe('галочка «Ставить КТУ своим бригадам» (
     }
     const before = h.calls.length;
     const closed = OUTPUT_ROUTES.filter(([method, url]) => !SUPERVISOR_ROUTES.some(([m, u]) => m === method && u === url));
-    expect(closed).toHaveLength(5);
+    expect(closed).toHaveLength(6);
     for (const [method, url] of [...closed, ...GRANT_ROUTES]) {
       expect((await call(method, url, 'kengashev', 'site_supervisor')).status, url).toBe(403);
     }

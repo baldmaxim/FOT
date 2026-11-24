@@ -151,7 +151,13 @@ vi.mock('../audit.service.js', () => ({
   },
 }));
 
-import { getBrigadeSalary, getBrigadeShares, peekBrigadeShares, peekBrigadeSharesMany } from './brigade-salary.service.js';
+import {
+  getBrigadeSalary,
+  getBrigadeShares,
+  peekBrigadeShares,
+  peekBrigadeSharesMany,
+  previewClosedBrigadeShares,
+} from './brigade-salary.service.js';
 import {
   BrigadeOutputModeConflictError,
   BrigadeShareRejectedError,
@@ -640,6 +646,33 @@ describe.skipIf(!PG_URL)('brigade salary (PostgreSQL, миграции 330 и 33
     expect(again.shares.get(BRIGADE)).toEqual(singleRecalc.shares);
     expect(await row()).toEqual(singleRecalc.row);
     expect(audit.calls).toEqual([]);
+  });
+
+  it('previewClosedBrigadeShares («Бригады → Объекты»): те же доли, что даст фиксация, без записи и аудита; открыли — null', async () => {
+    const { h2 } = await closeSeptemberInHalves();
+    await enterBoth();
+    const stored = async () => q('SELECT * FROM brigade_salary_results ORDER BY department_id, month');
+
+    // Не зафиксирован: расчёт есть, записи и аудита нет; фиксация потом даёт те же доли.
+    const preview = await previewClosedBrigadeShares(BRIGADE, '2026-09');
+    expect(preview?.state).toBe('fixed');
+    expect(await stored()).toHaveLength(0);
+    expect(audit.calls).toEqual([]);
+    expect(preview).toEqual(await getBrigadeShares(req, BRIGADE, '2026-09'));
+
+    // Снимок устарел (новый КТУ): расчёт — пересчитанный, а запись прежняя и аудита нет.
+    const before = await stored();
+    await setBrigadeKtu(BRIGADE, '2026-09-01', B, 15, PROFILE);
+    audit.calls = [];
+    const recalculated = await previewClosedBrigadeShares(BRIGADE, '2026-09');
+    expect(await stored()).toEqual(before);
+    expect(audit.calls).toEqual([]);
+    expect(recalculated).not.toEqual(preview);
+    expect(recalculated).toEqual(await getBrigadeShares(req, BRIGADE, '2026-09'));
+
+    // Подачу открыли — null: считать как открытую.
+    await q('UPDATE timesheet_approvals SET unlocked_at = now() WHERE id = $1', [h2]);
+    expect(await previewClosedBrigadeShares(BRIGADE, '2026-09')).toBeNull();
   });
 
   it('открытая бригада: предварительные доли по вводу из пакета = прежний путь (ввод читается сам)', async () => {

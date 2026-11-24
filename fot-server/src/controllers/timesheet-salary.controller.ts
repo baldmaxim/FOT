@@ -6,7 +6,8 @@
  *
  * Галочка «Выработка» (342) открывает два уровня: список, объекты и ввод выработки — все бригады
  * (resolveBrigadeOutputDepartmentIds), полный расчёт — только бригады, читаемые в табеле, в окне месяцев
- * (canReadBrigadeSalaryByGrant). Учётка из списка остаётся на прежнем пути canReadSalaryDepartment.
+ * (canReadBrigadeSalaryByGrant). Учётка из списка остаётся на прежнем пути canReadSalaryDepartment. Сводка «Бригады →
+ * Объекты» — тот же список бригад; люди в ней — только у бригад с открытым полным расчётом (resolveBrigadeSalaryReader).
  *
  * КТУ и «Доля» (355) — тем же, кто видит «Зарплату по объектам»: список — в охвате «Зарплаты», галочка — там же, где ей
  * открыт полный расчёт (canReadBrigadeSalaryByGrant). Никому — свою строку.
@@ -38,6 +39,7 @@ import {
 import { KTU_MAX_TENTHS, KTU_MIN_TENTHS, moneyToCents } from '../services/payroll/brigade-salary.calc.js';
 import { checkFixedShare, type IShareMinutes } from '../services/payroll/brigade-salary-shares.service.js';
 import { listBrigadeOutputs } from '../services/payroll/brigade-output-list.service.js';
+import { getBrigadeObjectsSummary } from '../services/payroll/brigade-objects-summary.service.js';
 import { listBrigadeMemberIds } from '../services/payroll/brigade-salary-source.service.js';
 import { getBrigadeSalary, loadBrigadeObjectKeys } from '../services/payroll/brigade-salary.service.js';
 import { query } from '../config/postgres.js';
@@ -48,6 +50,7 @@ import {
   canEditBrigadeInputEmployee,
   canEditBrigadeKtuEmployee,
   resolveBrigadeOutputDepartmentIds,
+  resolvePayrollReadableDepartmentIds,
 } from '../services/payroll/payroll-scope.service.js';
 import {
   canReadSalaryDepartment,
@@ -196,41 +199,83 @@ const resolveOutputBrigade = async (
   return department;
 };
 
+/** Проверка полного расчёта по галочке на один запрос: охват и окно месяцев читаются один раз, бригада — на каждую. */
+interface IBrigadeSalaryGrantReader {
+  /** Бригада открыта: галочка, страница табеля, бригада читается в табеле; у начальника участка — его бригада. */
+  canReadDepartment: (department: Pick<ITimesheetSalaryDepartment, 'id' | 'kind'>) => Promise<boolean>;
+  /** Месяц в окне роли (или окно на неё не действует). */
+  isMonthAllowed: () => Promise<boolean>;
+}
+
 /**
  * Полный расчёт по галочке «Выработка» (342), без списка «Зарплаты»: нужна страница табеля, только бригада, читаемая в
  * табеле, в окне месяцев роли. Проверка страницы отдельно: resolveTimesheetReadableDepartmentId для глобального просмотра
- * её не делает. Обычный отдел закрыт: в его ответе оклады и «К выплате» сотрудников. Иначе ответ уже отправлен и false.
- * Галочка начальника участка (370) — то же и только его бригады.
+ * её не делает. Обычный отдел закрыт: в его ответе оклады и «К выплате» сотрудников. Галочка начальника участка (370) —
+ * то же и только его бригады.
  */
+const resolveBrigadeSalaryGrantReader = async (
+  req: AuthenticatedRequest,
+  month: string,
+): Promise<IBrigadeSalaryGrantReader> => {
+  const level = await getRequestBrigadeSalaryLevel(req);
+  const hasTimesheetPage = await resolveEffectivePageAccess(req, '/timesheet', 'view')
+    || await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
+  let monthAllowed: Promise<boolean> | null = null;
+  return {
+    canReadDepartment: async department => !(
+      level.kind === 'none'
+      || (level.kind === 'supervisor' && !level.brigadeIds.has(department.id))
+      || !hasTimesheetPage
+      || department.kind !== 'brigade'
+      || (await resolveTimesheetReadableDepartmentId(req, department.id)) !== department.id
+    ),
+    isMonthAllowed: () => {
+      monthAllowed ??= (async () => {
+        const scope = await resolveTimesheetScope(req);
+        const [year, monthNumber] = month.split('-').map(Number);
+        return isTimesheetWindowExempt(req.user, scope)
+          || isDepartmentMonthAllowed(year, monthNumber, monthAccessFromUser(req.user));
+      })();
+      return monthAllowed;
+    },
+  };
+};
+
+/** Полный расчёт по галочке для одной бригады. Иначе ответ уже отправлен и false. */
 const canReadBrigadeSalaryByGrant = async (
   req: AuthenticatedRequest,
   res: Response,
   department: ITimesheetSalaryDepartment,
   month: string,
 ): Promise<boolean> => {
-  const level = await getRequestBrigadeSalaryLevel(req);
-  const hasTimesheetPage = await resolveEffectivePageAccess(req, '/timesheet', 'view')
-    || await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
-  if (
-    level.kind === 'none'
-    || (level.kind === 'supervisor' && !level.brigadeIds.has(department.id))
-    || !hasTimesheetPage
-    || department.kind !== 'brigade'
-    || (await resolveTimesheetReadableDepartmentId(req, department.id)) !== department.id
-  ) {
+  const reader = await resolveBrigadeSalaryGrantReader(req, month);
+  if (!(await reader.canReadDepartment(department))) {
     res.status(403).json(FORBIDDEN);
     return false;
   }
-  const scope = await resolveTimesheetScope(req);
-  const [year, monthNumber] = month.split('-').map(Number);
-  if (
-    !isTimesheetWindowExempt(req.user, scope)
-    && !isDepartmentMonthAllowed(year, monthNumber, monthAccessFromUser(req.user))
-  ) {
+  if (!(await reader.isMonthAllowed())) {
     res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
     return false;
   }
   return true;
+};
+
+/**
+ * Чей полный расчёт открыт — для сводки по объектам (люди бригады): то же правило, что у GET /timesheet-salary, но
+ * охват читается один раз на запрос. Учётка «Зарплаты» — видимые отделы «Зарплаты», галочка —
+ * resolveBrigadeSalaryGrantReader.
+ */
+const resolveBrigadeSalaryReader = async (
+  req: AuthenticatedRequest,
+  month: string,
+): Promise<(departmentId: string) => Promise<boolean>> => {
+  if (await getRequestPayrollSectionAccess(req)) {
+    const readable = await resolvePayrollReadableDepartmentIds(req);
+    return async departmentId => readable === 'all' || readable.includes(departmentId);
+  }
+  const reader = await resolveBrigadeSalaryGrantReader(req, month);
+  if (!(await reader.isMonthAllowed())) return async () => false;
+  return departmentId => reader.canReadDepartment({ id: departmentId, kind: 'brigade' });
 };
 
 /**
@@ -292,6 +337,24 @@ const brigadeObjects = async (req: AuthenticatedRequest, res: Response): Promise
     if (handlePayrollZodError(err, res)) return;
     console.error('timesheetSalary.brigadeObjects error:', err);
     res.status(500).json({ success: false, error: 'Ошибка загрузки объектов бригады' });
+  }
+};
+
+/**
+ * GET /api/payroll/timesheet-salary/objects-summary?month — «Бригады → Объекты»: объекты месяца по всем бригадам списка,
+ * бригады и люди на каждом, выработка и учтённые минуты для стоимости часа. Ничего не пишет. Люди — только у бригад,
+ * чей полный расчёт открыт пользователю; у остальных — итоги.
+ */
+const objectsSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { month } = listQuerySchema.parse(req.query);
+    const brigades = await listBrigadeOutputs(month, await resolveBrigadeOutputDepartmentIds(req));
+    const canReadPeople = await resolveBrigadeSalaryReader(req, month);
+    res.json({ success: true, data: await getBrigadeObjectsSummary(month, brigades, canReadPeople) });
+  } catch (err) {
+    if (handlePayrollZodError(err, res)) return;
+    console.error('timesheetSalary.objectsSummary error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки объектов' });
   }
 };
 
@@ -566,5 +629,5 @@ const setShare = async (req: AuthenticatedRequest, res: Response): Promise<void>
 };
 
 export const timesheetSalaryController = {
-  get, listBrigades, brigadeObjects, setOutput, setObjectOutput, setKtu, setShare,
+  get, listBrigades, brigadeObjects, objectsSummary, setOutput, setObjectOutput, setKtu, setShare,
 };

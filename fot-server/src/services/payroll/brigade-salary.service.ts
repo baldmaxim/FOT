@@ -748,6 +748,33 @@ export async function peekBrigadeSharesMany(
 }
 
 /**
+ * Закрытый месяц без актуального сохранённого расчёта (needs_fix у peekBrigadeSharesMany) — тот же расчёт по редакциям,
+ * что сделала бы фиксация (computeClosed), но в снимке только для чтения: ни записи в brigade_salary_results, ни аудита.
+ * Зафиксирует его, как и раньше, первое чтение «Зарплаты по объектам», «Расчётов» или «Свода». Месяц уже открыли —
+ * null: бригада считается как открытая.
+ */
+export async function previewClosedBrigadeShares(departmentId: string, month: string): Promise<IBrigadeShares | null> {
+  const { start } = monthBounds(month);
+  return withReadOnlySnapshot(async client => {
+    const closure = resolveBrigadeMonthClosure(await loadBrigadeMonthApprovals(departmentId, month, client), month);
+    if (!closure.closed) return null;
+    const inputs = await loadBrigadeSalaryInputs(departmentId, start, client);
+    const computation = await computeClosed(
+      client, departmentId, month, closure.versions.map(item => item.version_id), inputs,
+    );
+    return {
+      state: 'fixed',
+      mode: computation.mode,
+      distribution: computation.distribution,
+      output_amount: totalBrigadeOutput(inputs),
+      rows: computation.rows,
+      objects: computation.objects,
+      ...(computation.share_conflicts.length > 0 ? { share_conflicts: computation.share_conflicts } : {}),
+    };
+  });
+}
+
+/**
  * Предварительные доли открытой бригады для «Расчётов» — живой расчёт по табелю на asOf. Сохранённый результат не
  * читается и не пишется: у переоткрытого месяца прежний (stale) расчёт не берётся — незакрытый месяц считается по
  * живому табелю. Состав — из контекста бригады, членство второй раз не читается.

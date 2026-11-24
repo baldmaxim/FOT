@@ -30,7 +30,8 @@ const BRIGADE_SHARES_CONCURRENCY = 3;
 const unfixedAsOpen = (): IBrigadeShares => (
   { state: 'open', mode: 'objects', distribution: null, output_amount: null, rows: [], objects: [] }
 );
-const withBrigadeSlot = createConcurrencyLimiter(BRIGADE_SHARES_CONCURRENCY);
+/** Слот тяжёлого расчёта бригады — общий на процесс («Расчёты», «Свод», объекты «Бригад»): у пула 10 соединений. */
+export const withBrigadeSlot = createConcurrencyLimiter(BRIGADE_SHARES_CONCURRENCY);
 
 /** Доли бригад месяца: какие посчитаны предварительно, контексты открытых и кандидатов. */
 export interface IBrigadeStep {

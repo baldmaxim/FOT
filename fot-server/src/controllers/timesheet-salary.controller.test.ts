@@ -28,6 +28,8 @@ const svc = vi.hoisted(() => ({
   getBrigadeSalary: vi.fn(),
   setBrigadeShare: vi.fn(),
   query: vi.fn(),
+  resolvePayrollReadableDepartmentIds: vi.fn(),
+  getBrigadeObjectsSummary: vi.fn(),
 }));
 
 vi.mock('../services/payroll/timesheet-salary.service.js', () => ({
@@ -84,6 +86,10 @@ vi.mock('../services/payroll/payroll-scope.service.js', () => ({
   canEditBrigadeInputEmployee: svc.canEditBrigadeInputEmployee,
   canEditBrigadeKtuEmployee: svc.canEditBrigadeKtuEmployee,
   resolveBrigadeOutputDepartmentIds: svc.resolveBrigadeOutputDepartmentIds,
+  resolvePayrollReadableDepartmentIds: svc.resolvePayrollReadableDepartmentIds,
+}));
+vi.mock('../services/payroll/brigade-objects-summary.service.js', () => ({
+  getBrigadeObjectsSummary: svc.getBrigadeObjectsSummary,
 }));
 // Уровень доступа — заглушка; пределы КТУ (ktuRangeOf) — настоящие.
 vi.mock('../services/payroll/brigade-output-access.service.js', async importOriginal => ({
@@ -333,6 +339,91 @@ describe('timesheetSalaryController.brigadeObjects — стрелка во «Б�
     expect((await getObjects({ department_id: BRIGADE_ID, month: '2026-11' })).statusCode).toBe(404);
     expect((await getObjects({ department_id: BRIGADE_ID, month: '2026-13' })).statusCode).toBe(400);
     expect(svc.getBrigadeObjectOutputs).not.toHaveBeenCalled();
+  });
+});
+
+describe('timesheetSalaryController.objectsSummary — «Бригады → Объекты»', () => {
+  const OTHER = '7c6b5a49-3827-4165-9483-726150493827';
+  const BRIGADES = [{ department_id: BRIGADE_ID, name: 'бр.Аюби М.С.' }, { department_id: OTHER, name: 'бр.Другая' }];
+
+  const getSummary = async (query: Record<string, string>, user: Record<string, unknown> = {}) => {
+    const res = makeRes();
+    await timesheetSalaryController.objectsSummary(makeReq({
+      query,
+      user: { id: 'user-2', timesheet_months_back: 3, timesheet_months_forward: 2, ...user },
+    } as unknown as Partial<AuthenticatedRequest>), res);
+    return res;
+  };
+
+  /** Предикат «люди бригады видны», который контроллер передал сервису, — по каждой бригаде списка. */
+  const visibleBrigades = async (): Promise<string[]> => {
+    const canRead = svc.getBrigadeObjectsSummary.mock.calls[0][2] as (id: string) => Promise<boolean>;
+    const result: string[] = [];
+    for (const { department_id: id } of BRIGADES) if (await canRead(id)) result.push(id);
+    return result;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-03T12:00:00Z') });
+    svc.listBrigadeOutputs.mockResolvedValue(BRIGADES);
+    svc.getBrigadeObjectsSummary.mockResolvedValue({ month: '2026-11', objects: [], failed_brigades: [] });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('список бригад — тот же, что во «Бригадах»; ответ сервиса без изменений', async () => {
+    svc.resolveBrigadeOutputDepartmentIds.mockResolvedValue([BRIGADE_ID, OTHER]);
+    svc.resolvePayrollReadableDepartmentIds.mockResolvedValue('all');
+    const res = await getSummary({ month: '2026-11' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual({ month: '2026-11', objects: [], failed_brigades: [] });
+    expect(svc.listBrigadeOutputs).toHaveBeenCalledWith('2026-11', [BRIGADE_ID, OTHER]);
+    expect(svc.getBrigadeObjectsSummary).toHaveBeenCalledWith('2026-11', BRIGADES, expect.any(Function));
+  });
+
+  it('учётка «Зарплаты»: люди — в видимых отделах «Зарплаты», охват читается один раз', async () => {
+    svc.resolvePayrollReadableDepartmentIds.mockResolvedValue([BRIGADE_ID]);
+    await getSummary({ month: '2026-11' });
+    expect(await visibleBrigades()).toEqual([BRIGADE_ID]);
+    expect(svc.resolvePayrollReadableDepartmentIds).toHaveBeenCalledTimes(1);
+    expect(svc.resolveTimesheetReadableDepartmentId).not.toHaveBeenCalled();
+  });
+
+  describe('галочка «Выработка» без списка «Зарплаты»', () => {
+    beforeEach(() => {
+      svc.getRequestPayrollSectionAccess.mockResolvedValue(false);
+      svc.resolveEffectivePageAccess.mockResolvedValue(true);
+      svc.resolveTimesheetReadableDepartmentId.mockImplementation(async (_req: unknown, id: string) => (
+        id === BRIGADE_ID ? id : null
+      ));
+      svc.resolveTimesheetScope.mockResolvedValue('department');
+    });
+
+    it('люди — только в бригадах, читаемых в табеле; окно месяцев проверяется один раз', async () => {
+      await getSummary({ month: '2026-11' });
+      expect(await visibleBrigades()).toEqual([BRIGADE_ID]);
+      expect(svc.resolveTimesheetScope).toHaveBeenCalledTimes(1);
+      expect(svc.resolvePayrollReadableDepartmentIds).not.toHaveBeenCalled();
+    });
+
+    it('месяц вне окна роли — 200, но людей не видно ни в одной бригаде', async () => {
+      const res = await getSummary({ month: '2026-07' });
+      expect(res.statusCode).toBe(200);
+      expect(await visibleBrigades()).toEqual([]);
+    });
+
+    it('нет страницы табеля — людей не видно', async () => {
+      svc.resolveEffectivePageAccess.mockResolvedValue(false);
+      await getSummary({ month: '2026-11' });
+      expect(await visibleBrigades()).toEqual([]);
+    });
+  });
+
+  it('неверный месяц — 400, ничего не читается; отказ сервиса — 500', async () => {
+    expect((await getSummary({ month: '2026-13' })).statusCode).toBe(400);
+    expect(svc.listBrigadeOutputs).not.toHaveBeenCalled();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    svc.getBrigadeObjectsSummary.mockRejectedValue(new Error('db'));
+    expect((await getSummary({ month: '2026-11' })).statusCode).toBe(500);
   });
 });
 

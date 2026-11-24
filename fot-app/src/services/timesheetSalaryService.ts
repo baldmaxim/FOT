@@ -1,5 +1,10 @@
 import { apiClient } from '../api/client';
-import type { ITimesheetBrigadeObjectOutputs, ITimesheetBrigadeOutputItem, ITimesheetSalaryResponse } from '../types/timesheet';
+import type {
+  ITimesheetBrigadeObjectOutputs,
+  ITimesheetBrigadeOutputItem,
+  ITimesheetObjectsSummary,
+  ITimesheetSalaryResponse,
+} from '../types/timesheet';
 
 interface IApiResponse<T> { success: boolean; data: T }
 
@@ -33,6 +38,16 @@ export const timesheetSalaryService = {
     const params = new URLSearchParams({ department_id: departmentId, month });
     const res = await apiClient.get<IApiResponse<ITimesheetBrigadeObjectOutputs>>(
       `/payroll/timesheet-salary/brigade-objects?${params.toString()}`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** «Бригады → Объекты»: объекты месяца по всем бригадам — бригады, люди, часы и выработка для стоимости часа. */
+  getObjectsSummary: async (month: string, signal?: AbortSignal): Promise<ITimesheetObjectsSummary> => {
+    const params = new URLSearchParams({ month });
+    const res = await apiClient.get<IApiResponse<ITimesheetObjectsSummary>>(
+      `/payroll/timesheet-salary/objects-summary?${params.toString()}`,
       { signal },
     );
     return res.data;

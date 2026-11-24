@@ -225,7 +225,8 @@ export async function canReadSalaryDepartment(req: AuthenticatedRequest, departm
   return readable === 'all' || readable.includes(departmentId);
 }
 
-async function namesOf(employeeIds: number[]): Promise<Map<number, string>> {
+/** ФИО сотрудников одним запросом; кого нет — нет в карте. */
+export async function namesOf(employeeIds: number[]): Promise<Map<number, string>> {
   if (employeeIds.length === 0) return new Map();
   const found = await query<{ id: number; full_name: string | null }>(
     'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',

@@ -192,6 +192,7 @@ router.get('/vacation/employee/:empId', termsView, payrollVacationController.get
 router.get('/timesheet-salary', requireBrigadeSalaryAccess, timesheetSalaryController.get);
 router.get('/timesheet-salary/brigades', requireBrigadeOutputAccess, timesheetSalaryController.listBrigades);
 router.get('/timesheet-salary/brigade-objects', requireBrigadeOutputAccess, timesheetSalaryController.brigadeObjects);
+router.get('/timesheet-salary/objects-summary', requireBrigadeOutputAccess, timesheetSalaryController.objectsSummary);
 router.put('/timesheet-salary/output', requireBrigadeOutputAccess, timesheetSalaryController.setOutput);
 router.put('/timesheet-salary/object-output', requireBrigadeOutputAccess, timesheetSalaryController.setObjectOutput);
 router.put('/timesheet-salary/ktu', requireBrigadeSalaryAccess, timesheetSalaryController.setKtu);

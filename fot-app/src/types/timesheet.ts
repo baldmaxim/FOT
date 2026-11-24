@@ -414,6 +414,61 @@ export interface ITimesheetBrigadeObjectOutputs {
   objects: ITimesheetBrigadeObjectOutput[];
 }
 
+/** Почему пара «бригада × объект» не вошла в стоимость часа объекта. */
+export type TimesheetObjectsSummaryExclusion =
+  | 'no_output' | 'by_brigade' | 'nothing_to_distribute' | 'share_conflict' | 'error';
+
+/** Человек бригады на объекте во «Бригады → Объекты». */
+export interface ITimesheetObjectsSummaryMember {
+  employee_id: number;
+  full_name: string;
+  /** Σ дневных часов, округлённых до целых (как под стрелкой «Бригад»). */
+  hours: number;
+  /** Учтённые минуты — по ним стоимость часа. */
+  counted_minutes: number;
+}
+
+/** Бригада на объекте: её выработка там, часы и люди. */
+export interface ITimesheetObjectsSummaryBrigade {
+  department_id: string;
+  name: string;
+  state: 'fixed' | 'preliminary';
+  /** Выработка бригады на объекте; null — не внесена (или внесена суммой бригаде). */
+  output_amount: string | null;
+  in_rate: boolean;
+  /** Почему не вошла в стоимость часа; null — вошла. */
+  exclusion: TimesheetObjectsSummaryExclusion | null;
+  people: number;
+  hours: number;
+  counted_minutes: number;
+  /** null — состав скрыт: табель бригады пользователю не открыт. */
+  members: ITimesheetObjectsSummaryMember[] | null;
+}
+
+/** Объект месяца по всем бригадам. Стоимость часа = output_in_rate ÷ rated_minutes. */
+export interface ITimesheetObjectsSummaryObject {
+  object_key: string;
+  object_name: string;
+  /** Вся внесённая на объект выработка; null — не внесена ни одной бригадой. */
+  output_total: string | null;
+  /** Выработка бригад, вошедших в стоимость часа; null — ни одна не вошла. */
+  output_in_rate: string | null;
+  rated_minutes: number;
+  counted_minutes: number;
+  hours: number;
+  people: number;
+  brigades_in_rate: number;
+  brigades: ITimesheetObjectsSummaryBrigade[];
+}
+
+/** «Табель → Бригады → Объекты». */
+export interface ITimesheetObjectsSummary {
+  month: string;
+  objects: ITimesheetObjectsSummaryObject[];
+  /** Бригады, которые не удалось посчитать. */
+  failed_brigades: Array<{ department_id: string; name: string }>;
+}
+
 export interface ITimesheetSalaryRow {
   employee_id: number;
   /** ФИО — у бригады (группы по объектам рисуются без сетки табеля); у отдела null. */
