@@ -4,8 +4,9 @@
  * Чистая функция для генератора scripts/build-dormitory-journal-sync-sql.ts и его теста. Решения пользователя 24.11.2026:
  * - дата выезда — как в 1С: запись [въезд, выезд), день выезда уже не проживание;
  * - с `from` (01.11) записи совпадают с 1С по дням, дни до `from` не меняются (сентябрь–октябрь оплачены);
- * - исключение — въезд `realCheckInBefore` (01.09, дата загрузки 30.10): его заменяет настоящий заезд 1С, если он
- *   раньше и человек жил без перерыва с него до `from` и в 1С, и в портале (дни до 01.09 расчёт не читает);
+ * - исключение — въезд `realCheckInBefore` (01.09, дата загрузки 30.10): его заменяет настоящий заезд 1С (и раньше
+ *   приёма на карточку), если он раньше и человек жил без перерыва с него до `from` и в 1С, и в портале (дни до 01.09
+ *   расчёт не читает);
  * - общежитие без файла заезда (Мытищи) — только выезды внутри записи; общежития без файлов не трогаются.
  * Карточка дня — та, на которой уже лежит запись портала, иначе действующая на дату с самым поздним приёмом
  * (переоформленные: у одного ФИО несколько карточек). Повтор на обновлённых записях — пустой план.
@@ -464,8 +465,8 @@ export const planDormitoryJournalSync = (
         notes.push({ kind: 'check_in_unknown', fullName, employeeId, dormitory, text: `живёт с начала журнала (до 2026) — въезд оставлен ${ruDate(realCheckInBefore)}` });
         continue;
       }
-      const hire = cardById.get(employeeId)?.hireDate ?? null;
-      const checkIn = hire !== null && hire > interval.start ? hire : interval.start;
+      // Ровно заезд 1С, даже раньше приёма на эту карточку (решение пользователя 24.11): дни до 01.09 расчёт не читает.
+      const checkIn = interval.start;
       if (checkIn >= realCheckInBefore) continue;
       const clash = (staysByEmployee.get(employeeId) ?? []).some(other => other.id !== stay.id
         && overlaps(other, { checkIn, checkOut: realCheckInBefore }));
@@ -475,9 +476,7 @@ export const planDormitoryJournalSync = (
       }
       const update = updateOf(stay);
       update.after.checkIn = checkIn;
-      update.why.unshift(checkIn === interval.start
-        ? `заезд по 1С ${ruDate(checkIn)}`
-        : `заезд по 1С ${ruDate(interval.start)}, карточка с ${ruDate(checkIn)}`);
+      update.why.unshift(`заезд по 1С ${ruDate(checkIn)}`);
     }
 
     for (const { stay, after, why } of updates.values()) {

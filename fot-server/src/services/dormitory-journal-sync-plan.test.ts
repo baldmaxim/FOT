@@ -108,9 +108,9 @@ describe('общежития по журналам 1С', () => {
   const all = Object.values(stays);
   const plan = planDormitoryJournalSync(journals, cards, all, OPTIONS);
 
-  it('выезд — дата 1С, въезд 01.09 → настоящий заезд (не раньше приёма карточки)', () => {
+  it('выезд — дата 1С, въезд 01.09 → настоящий заезд (и раньше приёма на карточку)', () => {
     expect(updateOf(plan.operations, stays.s1.id)).toMatchObject({ after: { checkIn: '2026-03-06', checkOut: '2026-11-16' } });
-    expect(updateOf(plan.operations, stays.s2.id)).toMatchObject({ after: { checkIn: '2026-04-21', checkOut: null } });
+    expect(updateOf(plan.operations, stays.s2.id)).toMatchObject({ after: { checkIn: '2026-04-09', checkOut: null } });
     expect(updateOf(plan.operations, stays.s3.id)).toBeUndefined();
     expect(plan.notes).toContainEqual(expect.objectContaining({ kind: 'check_in_unknown', employeeId: 3 }));
   });
@@ -136,7 +136,7 @@ describe('общежития по журналам 1С', () => {
   });
 
   it('переоформление: запись остаётся на своей карточке, дальше — новая карточка', () => {
-    expect(updateOf(plan.operations, stays.s100.id)).toMatchObject({ after: { checkIn: '2026-05-17', checkOut: '2026-11-02' } });
+    expect(updateOf(plan.operations, stays.s100.id)).toMatchObject({ after: { checkIn: '2026-04-28', checkOut: '2026-11-02' } });
     expect(addsOf(plan.operations, 101)).toEqual([]);
     expect(updateOf(plan.operations, stays.s110.id)).toMatchObject({ after: { checkIn: '2026-03-01', checkOut: '2026-11-11' } });
     expect(addsOf(plan.operations, 111)).toEqual([expect.objectContaining({ address: A, checkIn: '2026-11-11', checkOut: null })]);
