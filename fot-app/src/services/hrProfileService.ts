@@ -72,13 +72,14 @@ export const hrProfileService = {
   },
 
   /** 404 с кодом HR_PROFILE_MISSING → null (профиль не заведён). */
-  async get(employeeId: number): Promise<{ profile: IHrProfileView | null; canEdit: boolean; canCreate: boolean }> {
+  async get(employeeId: number): Promise<{ profile: IHrProfileView | null; canEdit: boolean; canUnmask: boolean; canCreate: boolean }> {
     try {
       const res = await apiClient.get<ApiResponse<IHrProfileView>>(`/hr-profiles/${employeeId}`);
-      return { profile: res.data, canEdit: Boolean(res.meta?.can_edit), canCreate: Boolean(res.meta?.can_edit) };
+      // Права на этого сотрудника: can_edit — правка, ЗУП, OCR, загрузка; can_unmask — полные номера и сканы.
+      return { profile: res.data, canEdit: Boolean(res.meta?.can_edit), canUnmask: Boolean(res.meta?.can_unmask), canCreate: false };
     } catch (err) {
       const e = err as { status?: number; details?: { code?: string; data?: { can_create?: boolean } }; code?: string };
-      if (e?.status === 404) return { profile: null, canEdit: false, canCreate: Boolean(e.details?.data?.can_create) };
+      if (e?.status === 404) return { profile: null, canEdit: false, canUnmask: false, canCreate: Boolean(e.details?.data?.can_create) };
       throw err;
     }
   },

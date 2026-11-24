@@ -10,6 +10,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
   canWriteEmployeeInScope,
+  hasGlobalDepartmentReadScope,
   resolveAccessibleDepartmentIds,
   resolveAccessibleEmployeeIds,
 } from '../services/data-scope.service.js';
@@ -85,6 +86,27 @@ const canOpenHrSensitive = async (req: AuthenticatedRequest, employeeId: number)
   const access = await resolveHrDocumentsAccess(req);
   if (access === 'full') return canReadHrEmployee(req, employeeId);
   return access === 'documents' && canSeeEmployeeInStaffList(req, employeeId);
+};
+
+/**
+ * Окно «Реквизиты» на чтение (номера скрыты): охват ИЛИ флаг роли «Все отделы на чтение» (view_all_departments) —
+ * как карточка сотрудника (employees.controller getById). Полные номера, сканы и запись флаг не открывает.
+ */
+const canViewHrEmployee = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
+  if (await canReadHrEmployee(req, employeeId)) return true;
+  return hasGlobalDepartmentReadScope(req);
+};
+
+/** Полные номера в истории и расхождениях OCR: правка реквизитов и сотрудник в охвате чтения (как до флага). */
+const canUnmaskHrEmployee = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
+  if (!(await canEdit(req))) return false;
+  return canReadHrEmployee(req, employeeId);
+};
+
+/** Правка полей, ЗУП, OCR, загрузка — те же гарды, что у записывающих роутов (canWriteEmployeeInScope). */
+const canModifyHrEmployee = async (req: AuthenticatedRequest, employeeId: number): Promise<boolean> => {
+  if (!(await canUnmaskHrEmployee(req, employeeId))) return false;
+  return canWriteEmployeeInScope(req, employeeId);
 };
 
 const fail = (res: Response, err: unknown, fallback: string): void => {
@@ -339,7 +361,7 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
+    if (!employeeId || !(await canViewHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
@@ -348,11 +370,17 @@ const getOne = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       const emp = await queryOne<{ id: number; full_name: string }>(`SELECT id, full_name FROM employees WHERE id = $1`, [employeeId]);
       if (!emp) { res.status(404).json({ success: false, error: 'Сотрудник не найден' }); return; }
       // Завести реквизиты может и держатель ключа документов — иначе ему некуда загружать сканы.
-      const canCreate = await canEdit(req) || await canUseHrDocumentsForEmployee(req, employeeId);
+      const canCreate = await canModifyHrEmployee(req, employeeId) || await canUseHrDocumentsForEmployee(req, employeeId);
       res.status(404).json({ success: false, error: 'Реквизиты не заведены', code: 'HR_PROFILE_MISSING', data: { employee_id: emp.id, full_name: emp.full_name, can_create: canCreate } });
       return;
     }
-    res.json({ success: true, data: await buildProfileView(row, { unmask: false }), meta: { can_edit: await canEdit(req) } });
+    // can_edit — правка, ЗУП, OCR, загрузка; can_unmask — «Показать номера» и сканы (гард sensitive): модалка прячет
+    // кнопки, которые для этого сотрудника вернули бы 403.
+    res.json({
+      success: true,
+      data: await buildProfileView(row, { unmask: false }),
+      meta: { can_edit: await canModifyHrEmployee(req, employeeId), can_unmask: await canOpenHrSensitive(req, employeeId) },
+    });
   } catch (err) {
     fail(res, err, 'Ошибка получения профиля');
   }
@@ -434,11 +462,11 @@ const history = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
+    if (!employeeId || !(await canViewHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    res.json({ success: true, data: await listHistory(employeeId, { unmask: await canEdit(req) }) });
+    res.json({ success: true, data: await listHistory(employeeId, { unmask: await canUnmaskHrEmployee(req, employeeId) }) });
   } catch (err) {
     fail(res, err, 'Ошибка получения истории');
   }
@@ -526,11 +554,11 @@ const conflicts = async (req: AuthenticatedRequest, res: Response): Promise<void
   try {
     if (!ensureConfigured(res)) return;
     const employeeId = parseEmployeeId(req.params.employeeId);
-    if (!employeeId || !(await canReadHrEmployee(req, employeeId))) {
+    if (!employeeId || !(await canViewHrEmployee(req, employeeId))) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;
     }
-    const unmask = await canEdit(req);
+    const unmask = await canUnmaskHrEmployee(req, employeeId);
     const rows = await query<IConflictRow>(
       `SELECT c.id, c.employee_id, c.document_id, d.file_name AS document_name, d.category AS document_category,
               c.field_name, c.current_value_enc, c.ocr_value_enc, c.status, c.resolved_at, c.created_at

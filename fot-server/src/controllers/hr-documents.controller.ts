@@ -9,6 +9,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
   canWriteEmployeeInScope,
+  hasGlobalDepartmentReadScope,
 } from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import { canSeeEmployeeInStaffList } from '../services/employee-scope-filter.service.js';
@@ -169,9 +170,10 @@ const listForEmployee = async (req: AuthenticatedRequest, res: Response): Promis
     // Табельщице и держателю ключа документов — круг списка «Управления кадрами»:
     // общий скоуп записи добавляет табельщице всех, кто проходит на её объекты.
     const byStaffList = isTimekeeper(req) || (await resolveHrDocumentsAccess(req)) === 'documents';
+    // Флаг роли «Все отделы на чтение» открывает список слотов (без содержимого файлов) — как окно «Реквизиты».
     const allowed = !!employeeId && (byStaffList
       ? await canSeeEmployeeInStaffList(req, employeeId)
-      : await canWriteEmployeeInScope(req, employeeId));
+      : await canWriteEmployeeInScope(req, employeeId) || await hasGlobalDepartmentReadScope(req));
     if (!allowed) {
       res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       return;

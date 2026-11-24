@@ -18,6 +18,7 @@ vi.mock('../config/postgres.js', () => ({ query: h.query, queryOne: vi.fn(), wit
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
   canWriteEmployeeInScope: vi.fn(async () => true),
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
   resolveAccessibleDepartmentIds: vi.fn(async () => 'all'),
   resolveAccessibleEmployeeIds: vi.fn(async () => 'all'),
 }));

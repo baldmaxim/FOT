@@ -38,7 +38,8 @@ export function invalidateAccessibleScopeCache(): void {
 
 /**
  * «Роль видит все отделы на ЧТЕНИЕ» (флаг system_roles.view_all_departments,
- * миграция 237) — канонический предикат для READ-путей табеля и СКУД-проходов.
+ * миграция 237) — канонический предикат для READ-путей табеля и СКУД-проходов, а также окна «Реквизиты» в
+ * карточке сотрудника на чтение (номера скрыты; hr-profiles / hr-documents controller).
  * НЕ подключён к resolveAccessibleDepartmentIds/resolveEditableDepartmentIds:
  * общий department-scope и запись флагом не расширяются.
  * - is_admin — своя логика (company scope), флаг не применяется;

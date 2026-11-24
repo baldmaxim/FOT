@@ -46,6 +46,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
   resolveScopedDepartmentId: vi.fn(async () => null),
   canWriteEmployeeInScope: vi.fn(async () => access.allowWriteScope),
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
   resolveWritableScopedDepartmentId: vi.fn(async () => null),
 }));
 

@@ -66,6 +66,7 @@ vi.mock('../services/data-scope.service.js', () => ({
   // Общий скоуп пускает к обоим сотрудникам — как у табельщицы на проде.
   canAccessEmployeeInScope: vi.fn(async () => true),
   canWriteEmployeeInScope: s.canWriteEmployeeInScope,
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
   resolveAccessibleEmployeeIds: vi.fn(async () => new Set([ROSTER_EMPLOYEE, OBJECT_ONLY_EMPLOYEE])),
   resolveAccessibleDepartmentIds: vi.fn(async () => []),
   resolveScopedDepartmentId: vi.fn(async () => null),

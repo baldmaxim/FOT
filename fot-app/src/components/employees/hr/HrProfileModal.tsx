@@ -33,13 +33,6 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
   const { isAdmin, canEditPage, canViewPage, user } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const canEdit = isAdmin || canEditPage('/staff-control/hr-profiles');
-  const { canDocs, autoUnmask, afterCreate, canManageDoc } = useMemo(() => resolveHrDocumentPermissions({
-    canEdit,
-    canViewProfiles: canViewPage('/staff-control/hr-profiles'),
-    hasDocumentsKey: canEditPage('/staff-control/hr-documents'),
-    userId: user?.id ?? null,
-  }), [canEdit, canViewPage, canEditPage, user?.id]);
 
   const [tab, setTab] = useState<Tab>('info');
   const [sidePanel, setSidePanel] = useState<SidePanel>('preview');
@@ -51,6 +44,18 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
 
   const catalogQuery = useQuery({ queryKey: ['hr-catalog'], queryFn: () => hrProfileService.getCatalog(), staleTime: 30 * 60_000 });
   const profileQuery = useQuery({ queryKey: ['hr-profile', employeeId], queryFn: () => hrProfileService.get(employeeId) });
+  // Право роли + права на этого сотрудника от сервера: вне охвата (флаг «Все отделы на чтение») — только чтение.
+  const hasProfilesEdit = isAdmin || canEditPage('/staff-control/hr-profiles');
+  const employeeAccess = profileQuery.data ?? null;
+  const {
+    canEditFields, canUnmask, canUpload, canViewFiles, canCreate, autoUnmask, afterCreate, canManageDoc,
+  } = useMemo(() => resolveHrDocumentPermissions({
+    hasProfilesEdit,
+    canViewProfiles: canViewPage('/staff-control/hr-profiles'),
+    hasDocumentsKey: canEditPage('/staff-control/hr-documents'),
+    userId: user?.id ?? null,
+    employee: employeeAccess,
+  }), [hasProfilesEdit, canViewPage, canEditPage, user?.id, employeeAccess]);
   const docsQuery = useQuery({
     queryKey: ['hr-documents', employeeId],
     queryFn: () => hrProfileService.documents(employeeId),
@@ -175,7 +180,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
   };
 
   // Сканы смотрит только тот, кому открыт их просмотр; остальным — прежняя история.
-  const showPreview = canDocs && sidePanel === 'preview';
+  const showPreview = canViewFiles && sidePanel === 'preview';
 
   const fieldsToShow = useMemo(() => (catalog && profile ? visibleFields(catalog.fields, profile.requires_patent) : []), [catalog, profile]);
 
@@ -218,7 +223,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
             {!profileQuery.isPending && !profile && !profileQuery.isError && (
               <div className={styles.emptyState}>
                 <p>Реквизиты для этого сотрудника ещё не заведены.</p>
-                {canDocs ? <button type="button" className={styles.btnPrimary} onClick={() => void createProfile()}>Завести реквизиты</button>
+                {canCreate ? <button type="button" className={styles.btnPrimary} onClick={() => void createProfile()}>Завести реквизиты</button>
                   : <p className={styles.muted}>Заводит отдел кадров или табельщица.</p>}
               </div>
             )}
@@ -232,18 +237,18 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                         <span className={`${styles.pill} ${profile.requires_patent ? styles.pillWarn : styles.pillMuted}`}>
                           Патент: {profile.requires_patent ? 'требуется' : profile.fields.has_residence_permit ? 'не требуется (ВНЖ)' : 'не требуется'}
                         </span>
-                        <button type="button" className={`${styles.pill} ${profile.zup.is_uploaded ? styles.pillOk : styles.pillWarn}`} onClick={() => canEdit && void zupToggle()} disabled={!canEdit} title="Занесён ли сотрудник в 1С-ЗУП">
+                        <button type="button" className={`${styles.pill} ${profile.zup.is_uploaded ? styles.pillOk : styles.pillWarn}`} onClick={() => canEditFields && void zupToggle()} disabled={!canEditFields} title="Занесён ли сотрудник в 1С-ЗУП">
                           ЗУП: {profile.zup.is_uploaded ? `ДА (${fmtDate(profile.zup.uploaded_at)})` : 'НЕТ'}
                         </button>
                         {profile.zup.exported_at && <span className={styles.muted}>выгрузка: {fmtDate(profile.zup.exported_at)}</span>}
                         <span className={styles.spacer} />
-                        {canEdit && !editing && (
-                          <>
-                            <button type="button" className={styles.btnGhost} onClick={() => void toggleUnmask()} title={unmasked ? 'Скрыть номера' : 'Показать полные номера (действие записывается в аудит)'}>
-                              {unmasked ? <EyeOff size={14} /> : <Eye size={14} />} {unmasked ? 'Скрыть' : 'Показать номера'}
-                            </button>
-                            <button type="button" className={styles.btnPrimary} onClick={() => void startEdit()}><Edit3 size={14} /> Редактировать</button>
-                          </>
+                        {canUnmask && !editing && (
+                          <button type="button" className={styles.btnGhost} onClick={() => void toggleUnmask()} title={unmasked ? 'Скрыть номера' : 'Показать полные номера (действие записывается в аудит)'}>
+                            {unmasked ? <EyeOff size={14} /> : <Eye size={14} />} {unmasked ? 'Скрыть' : 'Показать номера'}
+                          </button>
+                        )}
+                        {canEditFields && !editing && (
+                          <button type="button" className={styles.btnPrimary} onClick={() => void startEdit()}><Edit3 size={14} /> Редактировать</button>
                         )}
                         {editing && (
                           <>
@@ -253,7 +258,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                         )}
                       </div>
 
-                      <HrOcrConflictsPanel conflicts={conflictsQuery.data ?? []} canEdit={canEdit} onResolved={refreshAll} />
+                      <HrOcrConflictsPanel conflicts={conflictsQuery.data ?? []} canEdit={canEditFields} onResolved={refreshAll} />
 
                       {editing ? (
                         <HrProfileForm catalog={catalog} value={draft} onChange={setDraft} disabled={saving} />
@@ -286,8 +291,8 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                       )}
                       <HrDocumentsGrid
                         slots={docsQuery.data?.slots ?? []}
-                        canUpload={canDocs}
-                        canView={canDocs}
+                        canUpload={canUpload}
+                        canView={canViewFiles}
                         canManageDoc={canManageDoc}
                         uploading={uploading}
                         onUpload={(t, f) => void upload(t, f)}
@@ -298,7 +303,7 @@ export const HrProfileModal: FC<IHrProfileModalProps> = ({ employeeId, onClose }
                   )}
                 </div>
                 <aside className={styles.side}>
-                  {canDocs && (
+                  {canViewFiles && (
                     <div className={styles.sideTabs}>
                       <button type="button" className={`${styles.tab} ${showPreview ? styles.tabActive : ''}`} onClick={() => setSidePanel('preview')}>Оригинал</button>
                       <button type="button" className={`${styles.tab} ${showPreview ? '' : styles.tabActive}`} onClick={() => setSidePanel('history')}>История</button>
