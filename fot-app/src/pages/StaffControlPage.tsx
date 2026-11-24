@@ -73,6 +73,7 @@ import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments'
 import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
 import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
 import { isHeaderDeptAllowed, resolveHeaderDeptFilter } from '../utils/staffDeptFilter';
+import { hasGlobalTimesheetReadScope } from '../utils/globalTimesheetRead';
 import { normalizeStaffStatusPeriod, resolveStaffAccessRules, STAFF_ALL_EMPLOYEES_PAGE_KEY } from '../utils/staffAccessRules';
 import { buildScheduleViews } from '../utils/staffScheduleViews';
 import { refreshStaffChunksFor } from '../utils/staffChunkInvalidation';
@@ -1524,14 +1525,15 @@ export const StaffControlPage: FC = () => {
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
-  // Табельщица с правом «все сотрудники» видит всю организацию на чтение: фильтр отделов не
-  // сужается, ей доступны «Уволенные» и чипы месяца (правка — по прежним правам).
+  // Табельщица с правом «все сотрудники» и роль с флагом «Все отделы на чтение» видят всю организацию на
+  // чтение: фильтр отделов не сужается, доступны «Уволенные» и чипы месяца (правка — по прежним правам).
   const { hasAllEmployees, restrictToManaged, canViewFired, defaultSection } = resolveStaffAccessRules({
     isAdmin,
     roleCode: profile?.role_code,
     hasAllEmployeesKey: canViewPage(STAFF_ALL_EMPLOYEES_PAGE_KEY),
     canManageStaff,
     isDepartmentScope,
+    hasGlobalRead: hasGlobalTimesheetReadScope(profile),
   });
   // Руководитель с одним отделом — фиксируем фильтр на этом отделе (без возможности
   // переключения). Делаем через эффект, потому что profile/managed_department_ids
@@ -1547,7 +1549,8 @@ export const StaffControlPage: FC = () => {
 
   // Дефолт раздела — только когда скоуп известен (profile загружен): руководителю отдела
   // «СУ-10» по умолчанию дал бы пустую таблицу, если его отделы в СМ, — ему «Все». Кто видит
-  // всю организацию (в т.ч. табельщица с правом «все сотрудники») — открывает «СУ-10».
+  // всю организацию (в т.ч. табельщица с правом «все сотрудники» и роль с флагом «Все отделы на чтение») —
+  // открывает «СУ-10».
   const scopeKnown = profile != null;
   const section: StaffSection = sectionChoice ?? defaultSection;
 

@@ -8,6 +8,7 @@ const TIMEKEEPER = {
   hasAllEmployeesKey: false,
   canManageStaff: false,
   isDepartmentScope: true,
+  hasGlobalRead: false,
 };
 
 describe('resolveStaffAccessRules', () => {
@@ -45,6 +46,7 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployeesKey: true,
       canManageStaff: true,
       isDepartmentScope: false,
+      hasGlobalRead: false,
     })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true, defaultSection: 'su10' });
   });
 
@@ -55,6 +57,7 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployeesKey: false,
       canManageStaff: false,
       isDepartmentScope: true,
+      hasGlobalRead: false,
     }).defaultSection).toBe('all');
   });
 
@@ -65,6 +68,18 @@ describe('resolveStaffAccessRules', () => {
       hasAllEmployeesKey: false,
       canManageStaff: true,
       isDepartmentScope: false,
+      hasGlobalRead: false,
+    })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true, defaultSection: 'su10' });
+  });
+
+  it('роль с флагом «Все отделы на чтение» («Учёт проживания») — вся организация на чтение, правки нет', () => {
+    expect(resolveStaffAccessRules({
+      isAdmin: false,
+      roleCode: 'checks',
+      hasAllEmployeesKey: false,
+      canManageStaff: false,
+      isDepartmentScope: true,
+      hasGlobalRead: true,
     })).toEqual({ hasAllEmployees: false, restrictToManaged: false, canViewFired: true, defaultSection: 'su10' });
   });
 });

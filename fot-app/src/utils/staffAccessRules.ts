@@ -5,6 +5,11 @@
  * hasStaffAllEmployeesGrant): ключ «Управление кадрами — все сотрудники» действует только у
  * роли «Табельщица» — у других ролей галочка в матрице ничего не меняет, у администратора
  * своя логика. Всегда проверять через resolveStaffAccessRules, а не сырой ключ.
+ *
+ * Флаг роли «Все отделы на чтение» (view_all_departments; сервер — hasGlobalDepartmentReadScope → globalRead
+ * списка) тоже открывает всю организацию на чтение: фильтр отделов не сужен, «Уволенные» и чипы месяца видны, раздел
+ * «СУ-10» (24.11.2026, роль «Учёт проживания»). Дерево отделов у неё — общее, сервер отдаёт его целиком; правка — по
+ * прежним правам.
  */
 
 import type { StaffSection } from '../components/staff/staffSections';
@@ -22,10 +27,15 @@ interface IStaffAccessInput {
   canManageStaff: boolean;
   /** Скоуп по назначенным отделам: руководитель, табельщица. */
   isDepartmentScope: boolean;
+  /** Флаг роли «Все отделы на чтение» — hasGlobalTimesheetReadScope(profile): не админ, не табельщица. */
+  hasGlobalRead: boolean;
 }
 
 export interface IStaffAccessRules {
-  /** Вся организация на чтение: список не сужается, дерево отделов — полное. */
+  /**
+   * Право табельщицы «все сотрудники»: дерево отделов экрана — отдельный эндпоинт (getStaffTree). Не единственный
+   * признак чтения всей организации — ещё флаг роли «Все отделы на чтение» (hasGlobalRead).
+   */
   hasAllEmployees: boolean;
   /** Фильтр отделов ограничен назначенными; единственный отдел фиксируется. */
   restrictToManaged: boolean;
@@ -34,7 +44,7 @@ export interface IStaffAccessRules {
   /**
    * Раздел, с которого открывается экран. «Все» — только тем, чей список сужен до своих
    * отделов: их отделы могут быть в СМ, и на «СУ-10» таблица была бы пустой. Кто видит всю
-   * организацию (админ, кадровый админ, табельщица с правом) — «СУ-10».
+   * организацию (админ, кадровый админ, табельщица с правом, роль с флагом «Все отделы на чтение») — «СУ-10».
    */
   defaultSection: StaffSection;
 }
@@ -45,13 +55,14 @@ export const resolveStaffAccessRules = ({
   hasAllEmployeesKey,
   canManageStaff,
   isDepartmentScope,
+  hasGlobalRead,
 }: IStaffAccessInput): IStaffAccessRules => {
   const hasAllEmployees = !isAdmin && roleCode === TIMEKEEPER_ROLE_CODE && hasAllEmployeesKey;
-  const restrictToManaged = isDepartmentScope && !hasAllEmployees;
+  const restrictToManaged = isDepartmentScope && !hasAllEmployees && !hasGlobalRead;
   return {
     hasAllEmployees,
     restrictToManaged,
-    canViewFired: canManageStaff || hasAllEmployees,
+    canViewFired: canManageStaff || hasAllEmployees || hasGlobalRead,
     defaultSection: restrictToManaged ? 'all' : 'su10',
   };
 };
