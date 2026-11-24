@@ -48,6 +48,15 @@
 
 .muted { color: var(--text-muted); }
 
+/* Предупреждение под ФИО («⚠ Есть взыскания»): текст основного цвета на жёлтой подложке — контраст в обеих темах. */
+.note {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 .hint {
   padding: 10px;
   font-size: 13px;

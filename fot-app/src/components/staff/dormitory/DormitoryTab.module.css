@@ -92,7 +92,7 @@
 .paidCheck input:disabled { cursor: default; }
 .paidCheck input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Справа от поиска: выбор общежития и «История» / выбор месяца — высота как у кнопок панели. */
+/* Справа от поиска: выбор общежития, «Архив», «История взысканий» / выбор месяца — высота как у кнопок панели. */
 .aside {
   display: flex;
   flex-wrap: wrap;
@@ -136,6 +136,21 @@
 .toggle[aria-pressed='true'] { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
 .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* «Заселить»: взыскания выбранного сотрудника (миграция 378) — основной текст на жёлтой подложке, контраст в обеих темах. */
+.penaltyWarning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.penaltyWarning strong { display: block; font-weight: 600; }
+.penaltyWarning ul { margin: 4px 0 0; padding-left: 18px; }
+
 .monthNav {
   display: flex;
   flex: 1 1 auto;
@@ -174,7 +189,7 @@
 }
 
 @media (min-width: 769px) {
-  /* Одной строкой с поиском: селект и «История» не переносятся. */
+  /* Одной строкой с поиском: селект и кнопки режимов не переносятся. */
   .aside { flex-wrap: nowrap; }
   .select { flex: 0 0 280px; min-height: 36px; font-size: 14px; }
   .toggle { min-height: 36px; }

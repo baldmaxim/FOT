@@ -106,6 +106,8 @@ export interface IRegistryTableProps<Row> {
   onColumnWidth?: (columnKey: string, width: number) => void;
   /** Передана — галочка «Уволенные» в фильтре столбца «Сотрудник» (снята — воронка подсвечена). */
   employeeToggle?: { label: string; checked: boolean; onApply: (checked: boolean) => void };
+  /** «—» и пустые — первыми в списке фильтра столбца («Проживание»: сначала «—», затем даты). */
+  emptyFilterFirst?: boolean;
 }
 
 /**
@@ -118,6 +120,7 @@ export const RegistryTable = <Row,>({
   columns, rows, sizeRows = rows, visibleRows, view, onViewChange, loading, label, rowKey, rowLabel,
   onEdit, onDelete, deleteLabel = 'Удалить', canEditRow, canDeleteRow, busyKey = null, raisedFilters = false, onFilterOpenChange,
   onRowClick, footer = null, groupRows, cellRenderers, rowTone, columnWidths = NO_WIDTHS, onColumnWidth, employeeToggle,
+  emptyFilterFirst = false,
 }: IRegistryTableProps<Row>): ReactElement => {
   const [filterFor, setFilterFor] = useState<{ key: string; anchor: HTMLElement } | null>(null);
   const [finePointer] = useState(() => typeof window !== 'undefined' && window.matchMedia(FINE_POINTER_QUERY).matches);
@@ -125,8 +128,8 @@ export const RegistryTable = <Row,>({
   const [liveWidth, setLiveWidth] = useState<{ key: string; width: number } | null>(null);
   const filterColumn = filterFor ? columns.find(column => column.key === filterFor.key) ?? null : null;
   const filterOptions = useMemo(
-    () => (filterFor ? columnFilterOptions(rows, columns, view.filters, filterFor.key) : []),
-    [filterFor, rows, columns, view.filters],
+    () => (filterFor ? columnFilterOptions(rows, columns, view.filters, filterFor.key, { emptyFirst: emptyFilterFirst }) : []),
+    [filterFor, rows, columns, view.filters, emptyFilterFirst],
   );
   const withActions = onEdit !== undefined || onDelete !== undefined;
   const columnCount = columns.length + (withActions ? 2 : 1);

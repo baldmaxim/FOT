@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type FC } from 'react';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { useSessionState } from '../../../hooks/useSessionState';
 import {
   dormitoryService,
   type IApartmentResident,
@@ -18,6 +19,7 @@ import {
   isDismissedStay,
   touchesMonth,
 } from '../../../utils/housingTables';
+import { parseOneOf } from '../../../utils/sessionState';
 import type { ITableView } from '../../../utils/tableView';
 import { PayrollRegistryModal } from '../../salary/registry/PayrollRegistryModal';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
@@ -29,6 +31,7 @@ import { StayMoveModal } from './StayMoveModal';
 import { useEmployeeCardCell } from './useEmployeeCardCell';
 
 type ResidentsTab = 'current' | 'history';
+const parseResidentsTab = parseOneOf<ResidentsTab>(['current', 'history']);
 
 type Editor =
   | { mode: 'add' }
@@ -43,7 +46,7 @@ interface IApartmentResidentsModalProps {
   today: string;
   /** Выбранный месяц (YYYY-MM): «Проживающие» — жившие в нём хоть день. */
   month: string;
-  /** Возврат из карточки сотрудника — на вкладку «Квартира» и этот месяц. */
+  /** Возврат из карточки сотрудника — на вкладку «Квартира», этот месяц и в это окно. */
   cardBackPath: string;
   /** Для «Переселить»: другие квартиры и подсказки общежитий. */
   apartments: readonly ICompanyApartment[];
@@ -71,7 +74,10 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
   const cardCell = useEmployeeCardCell<IApartmentResident>(cardBackPath);
   const toast = useToast();
   const baseId = useId();
-  const [tab, setTab] = useState<ResidentsTab>('current');
+  // Вкладка окна — своя у каждой квартиры и переживает уход в карточку: возврат из «Истории» — в «Историю».
+  const [tab, setTab] = useSessionState<ResidentsTab>(`housing.apartment.${apartment.id}.tab`, 'current', {
+    parse: parseResidentsTab,
+  });
   const [editor, setEditor] = useState<Editor>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -158,6 +164,8 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           raisedFilters
           onFilterOpenChange={setFilterOpen}
           columnWidthsKey="housing.apartment-residents"
+          viewKey={`housing.apartment.${apartment.id}.residents`}
+          emptyFilterFirst
           isDismissed={isDismissedStay}
           cellRenderers={{
             ...cardCell,
@@ -195,6 +203,8 @@ export const ApartmentResidentsModal: FC<IApartmentResidentsModalProps> = ({
           raisedFilters
           onFilterOpenChange={setFilterOpen}
           columnWidthsKey="housing.apartment-history"
+          viewKey={`housing.apartment.${apartment.id}.history`}
+          emptyFilterFirst
           isDismissed={isDismissedStay}
           cellRenderers={cardCell}
         />

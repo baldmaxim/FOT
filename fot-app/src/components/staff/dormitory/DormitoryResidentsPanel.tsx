@@ -3,24 +3,29 @@ import { useQuery } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { useSessionState } from '../../../hooks/useSessionState';
 import {
   DORMITORY_RESIDENTS_KEY,
   dormitoryService,
   type IDormitoryResident,
 } from '../../../services/dormitoryService';
+import { getMonthLabel } from '../../../utils/calendarUtils';
 import { formatDate } from '../../../utils/formatMoney';
 import {
-  buildDormitoryHistoryExport,
+  buildDormitoryArchiveExport,
   buildDormitoryResidentsExport,
+  closedInMonth,
   dismissedTone,
-  DORMITORY_HISTORY_COLUMNS,
+  DORMITORY_ARCHIVE_COLUMNS,
   dormitoryResidentColumns,
   isDismissedStay,
   touchesMonth,
 } from '../../../utils/housingTables';
+import { parseOneOf, parseString } from '../../../utils/sessionState';
 import type { ITableView } from '../../../utils/tableView';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { DormitoriesModal } from './DormitoriesModal';
+import { DormitoryPenaltiesPanel } from './DormitoryPenaltiesPanel';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import styles from './DormitoryTab.module.css';
 import { StayMoveModal } from './StayMoveModal';
@@ -42,6 +47,10 @@ type Editor =
   | { mode: 'move'; stay: IDormitoryResident }
   | null;
 
+/** Режим вкладки: жившие в месяце, «Архив» (выехавшие в месяце), «История взысканий». */
+type ResidentsMode = 'current' | 'archive' | 'penalties';
+const parseMode = parseOneOf<ResidentsMode>(['current', 'archive', 'penalties']);
+
 /** «Все общежития» в селекте. */
 const ALL = '';
 const residentKey = (resident: IDormitoryResident): number => resident.id;
@@ -55,18 +64,23 @@ const sameAddress = (a: string | null, b: string): boolean => (a ?? '').trim().t
  * — все, кто жил в нём хоть день; селект общежития (с числом живших в месяце; «Все общежития» — плюс столбец
  * «Общежитие»), поиск по ФИО — по всем; №, Подразделение организации, Сотрудник (ссылка на карточку), Дата въезда,
  * Дата выезда, Паспорт (полный — с правкой «Реквизитов» или «Проживания»), Крайний проход (до конца месяца), Крайний проход на объекте,
- * Начальник участка, Комментарий; ширина столбцов — как в Excel. «История» — все закончившиеся записи (с
- * комментарием), месяц на неё не влияет. «Справочник» — справочник общежитий (миграция 377): при заселении и
- * переселении общежитие выбирают из него. С правом правки — «Заселить» (с комментарием), ✎ (даты, выезд, комментарий,
- * «Переселить в другое общежитие…»), 🗑 — ошибочная запись. Уволенные подсвечены, галочка «Уволенные» в фильтре «Сотрудника» их скрывает.
+ * Начальник участка, Комментарий; ширина столбцов — как в Excel. «Архив» (24.11.2026, было «История» — все
+ * закончившиеся) — выехавшие в выбранном месяце, с комментарием. «История взысканий» (миграция 378) — отдельный список
+ * и «Чёрный список» пропусков. «Справочник» — справочник общежитий (миграция 377): при заселении и переселении
+ * общежитие выбирают из него. С правом правки — «Заселить» (с комментарием и предупреждением о взысканиях), ✎ (даты,
+ * выезд, комментарий, «Переселить в другое общежитие…»), 🗑 — ошибочная запись. Уволенные подсвечены, галочка
+ * «Уволенные» в фильтре «Сотрудника» их скрывает. Режим, общежитие, поиск и фильтры переживают уход в карточку.
  */
 export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
   canEdit, addresses, month, cardBackPath, onChanged,
 }) => {
   const toast = useToast();
   const selectId = useId();
-  const [place, setPlace] = useState(ALL);
-  const [showHistory, setShowHistory] = useState(false);
+  const [savedPlace, setPlace] = useSessionState<string>('housing.dormitory.place', ALL, { parse: parseString });
+  const [mode, setMode] = useSessionState<ResidentsMode>('housing.dormitory.mode', 'current', { parse: parseMode });
+  const archive = mode === 'archive';
+  const [year, monthNumber] = month.split('-').map(Number);
+  const monthLabel = getMonthLabel(year, monthNumber);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [editor, setEditor] = useState<Editor>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -82,11 +96,12 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
 
   /** Жили в выбранном месяце хоть день. */
   const current = useMemo(() => all.filter(resident => touchesMonth(resident, month)), [all, month]);
-  const history = useMemo(() => all.filter(resident => resident.check_out !== null && resident.check_out <= today), [all, today]);
+  /** «Архив»: выехавшие в выбранном месяце (не позже сегодня). */
+  const archived = useMemo(() => all.filter(resident => closedInMonth(resident, month, today)), [all, month, today]);
 
   /**
    * Общежития с числом живших в месяце — по написанию первой записи, без учёта регистра. Каждая запись — один раз:
-   * закончившаяся в выбранном месяце есть и в нём, и в «Истории».
+   * закончившаяся в выбранном месяце есть и в нём, и в «Архиве».
    */
   const places = useMemo(() => {
     const counts = new Map<string, { label: string; count: number }>();
@@ -101,14 +116,17 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
     return [...counts.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
   }, [all, month]);
 
-  const source = showHistory ? history : current;
+  // Сохранённое общежитие, которого больше нет в списке (переименовали, нет записей в охвате), — «Все общежития».
+  const place = savedPlace === ALL || !query.data || places.some(item => item.label === savedPlace) ? savedPlace : ALL;
+  const source = archive ? archived : current;
   const rows = useMemo(
     () => (query.data ? (place === ALL ? source : source.filter(resident => sameAddress(resident.address, place))) : undefined),
     [query.data, place, source],
   );
   const withPlace = place === ALL;
   const title = place === ALL ? 'Общежития' : place;
-  const columns = useMemo(() => (showHistory ? DORMITORY_HISTORY_COLUMNS : dormitoryResidentColumns(withPlace)), [showHistory, withPlace]);
+  const columns = useMemo(() => (archive ? DORMITORY_ARCHIVE_COLUMNS : dormitoryResidentColumns(withPlace)), [archive, withPlace]);
+  const toggleMode = (next: ResidentsMode) => setMode(prev => (prev === next ? 'current' : next));
 
   const remove = async (resident: IDormitoryResident) => {
     if (busyId !== null) return;
@@ -126,25 +144,30 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
 
   const aside = () => (
     <div className={styles.aside}>
-      <select
-        id={selectId}
-        className={styles.select}
-        value={place}
-        onChange={event => setPlace(event.target.value)}
-        aria-label="Общежитие"
-      >
-        <option value={ALL}>{`Все общежития (${current.length})`}</option>
-        {places.map(item => (
-          <option key={item.label} value={item.label}>{`${item.label} (${item.count})`}</option>
-        ))}
-      </select>
+      {mode !== 'penalties' && (
+        <select
+          id={selectId}
+          className={styles.select}
+          value={place}
+          onChange={event => setPlace(event.target.value)}
+          aria-label="Общежитие"
+        >
+          <option value={ALL}>{`Все общежития (${current.length})`}</option>
+          {places.map(item => (
+            <option key={item.label} value={item.label}>{`${item.label} (${item.count})`}</option>
+          ))}
+        </select>
+      )}
+      <button type="button" className={styles.toggle} aria-pressed={archive} onClick={() => toggleMode('archive')}>
+        Архив
+      </button>
       <button
         type="button"
         className={styles.toggle}
-        aria-pressed={showHistory}
-        onClick={() => setShowHistory(value => !value)}
+        aria-pressed={mode === 'penalties'}
+        onClick={() => toggleMode('penalties')}
       >
-        История
+        История взысканий
       </button>
       <button type="button" className={styles.toggle} onClick={() => setDirectoryOpen(true)}>
         Справочник
@@ -154,33 +177,39 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
 
   return (
     <>
-      <RegistryPanel
-        // Другие столбцы — заново: сортировка и фильтры прежних столбцов к ним не относятся.
-        key={showHistory ? 'history' : `current-${withPlace ? 'all' : 'one'}`}
-        columnWidthsKey={showHistory ? 'housing.dormitory-history' : 'housing.dormitory'}
-        isDismissed={isDismissedStay}
-        cellRenderers={cardCell}
-        label={showHistory ? `${title} — история` : title}
-        columns={columns}
-        rows={rows}
-        isLoading={query.isLoading}
-        isError={query.isError}
-        onRetry={() => { void query.refetch(); }}
-        rowKey={residentKey}
-        rowLabel={residentName}
-        searchText={residentName}
-        fioSearch
-        {...(showHistory ? { initialView: BY_CHECK_OUT } : {})}
-        searchAside={aside}
-        buildExport={showHistory ? buildDormitoryHistoryExport(title) : buildDormitoryResidentsExport(title, withPlace)}
-        sendExport={dormitoryService.exportTable}
-        onAdd={canEdit && !showHistory ? () => setEditor({ mode: 'add' }) : undefined}
-        addLabel="Заселить"
-        onEdit={canEdit && !showHistory ? resident => setEditor({ mode: 'edit', stay: resident }) : undefined}
-        onDelete={canEdit && !showHistory ? resident => { void remove(resident); } : undefined}
-        busyKey={busyId}
-        rowTone={resident => dismissedTone(resident, today)}
-      />
+      {mode === 'penalties' ? (
+        <DormitoryPenaltiesPanel canEdit={canEdit} cardBackPath={cardBackPath} searchAside={aside} />
+      ) : (
+        <RegistryPanel
+          // Другие столбцы — заново; сортировка, фильтры и поиск — из sessionStorage (viewKey), не сбрасываются.
+          key={archive ? 'archive' : `current-${withPlace ? 'all' : 'one'}`}
+          columnWidthsKey={archive ? 'housing.dormitory-history' : 'housing.dormitory'}
+          viewKey={archive ? 'housing.dormitory.archive' : 'housing.dormitory'}
+          emptyFilterFirst
+          isDismissed={isDismissedStay}
+          cellRenderers={cardCell}
+          label={archive ? `${title} — архив, ${monthLabel}` : title}
+          columns={columns}
+          rows={rows}
+          isLoading={query.isLoading}
+          isError={query.isError}
+          onRetry={() => { void query.refetch(); }}
+          rowKey={residentKey}
+          rowLabel={residentName}
+          searchText={residentName}
+          fioSearch
+          {...(archive ? { initialView: BY_CHECK_OUT } : {})}
+          searchAside={aside}
+          buildExport={archive ? buildDormitoryArchiveExport(title, monthLabel) : buildDormitoryResidentsExport(title, withPlace)}
+          sendExport={dormitoryService.exportTable}
+          onAdd={canEdit && !archive ? () => setEditor({ mode: 'add' }) : undefined}
+          addLabel="Заселить"
+          onEdit={canEdit && !archive ? resident => setEditor({ mode: 'edit', stay: resident }) : undefined}
+          onDelete={canEdit && !archive ? resident => { void remove(resident); } : undefined}
+          busyKey={busyId}
+          rowTone={resident => dismissedTone(resident, today)}
+        />
+      )}
 
       {editor?.mode === 'add' && (
         <DormitoryStayModal
@@ -188,6 +217,7 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
           {...(place === ALL ? {} : { initialAddress: place })}
           fixedKind="dormitory"
           withComment
+          penaltyCheck
           onClose={() => setEditor(null)}
           onSaved={onChanged}
         />

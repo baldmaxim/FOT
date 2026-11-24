@@ -2,17 +2,25 @@ import { describe, expect, it } from 'vitest';
 
 import type { ICompensationMonthRow, IDormitoryStay } from '../services/dormitoryService';
 import {
+  APARTMENT_ARCHIVE_COLUMNS,
   apartmentTitle,
+  buildCompensationExport,
+  closedInMonth,
+  COMPENSATION_ARCHIVE_COLUMNS,
   COMPENSATION_COLUMNS,
+  compensationArchiveRows,
   compensationTone,
   compensationTotals,
   dismissedTone,
+  DORMITORY_ARCHIVE_COLUMNS,
   DORMITORY_DIRECTORY_COLUMNS,
-  DORMITORY_HISTORY_COLUMNS,
   formatPassTime,
   formatPeriod,
+  housingBackPath,
   housingMonthOptions,
   livesOn,
+  readHousingReturn,
+  stripHousingReturn,
   touchesMonth,
 } from './housingTables';
 
@@ -76,7 +84,6 @@ describe('«Компенсация аренды»: пауза и бригада 
     const resumed = row({ check_in: '2026-12-01', compensation_start: '2026-09-01', paused_from: '2026-11-16', resumed_from: '2026-12-01' });
     expect(text('check_in', resumed)).toBe('01.09.2026');
     expect(text('paused_from', resumed)).toBe('16.11.2026');
-    expect(text('resumed_from', resumed)).toBe('01.12.2026');
     expect(text('check_in', row())).toBe('01.09.2026');
     expect(text('paused_from', row())).toBe('—');
   });
@@ -106,10 +113,56 @@ describe('«Проживание»: месяц и выгрузка (20.11.2026)'
     expect(touchesMonth({ check_in: '2026-09-01', check_out: '2026-11-01' }, '2026-11')).toBe(false);
   });
 
-  it('история общежития — с комментарием записи', () => {
-    expect(DORMITORY_HISTORY_COLUMNS.map(column => column.label)).toEqual(
+  it('архив общежития — с комментарием записи', () => {
+    expect(DORMITORY_ARCHIVE_COLUMNS.map(column => column.label)).toEqual(
       ['Сотрудник', 'Подразделение', 'Общежитие', 'Дата въезда', 'Дата выезда', 'Комментарий'],
     );
+  });
+});
+
+describe('«Проживание»: архив за месяц, «Возобновлена» убрана, возврат из карточки (24.11.2026)', () => {
+  it('архив месяца — выезд с 1-го числа по конец месяца и не позже сегодня', () => {
+    const today = '2026-11-24';
+    expect(closedInMonth({ check_out: '2026-11-01' }, '2026-11', today)).toBe(true);
+    expect(closedInMonth({ check_out: '2026-11-24' }, '2026-11', today)).toBe(true);
+    // Выезд назначен на завтра — ещё не архив.
+    expect(closedInMonth({ check_out: '2026-11-25' }, '2026-11', today)).toBe(false);
+    expect(closedInMonth({ check_out: '2026-10-31' }, '2026-11', today)).toBe(false);
+    expect(closedInMonth({ check_out: '2026-10-31' }, '2026-10', today)).toBe(true);
+    expect(closedInMonth({ check_out: null }, '2026-11', today)).toBe(false);
+    // Будущий месяц — пусто.
+    expect(closedInMonth({ check_out: '2026-12-01' }, '2026-12', today)).toBe(false);
+  });
+
+  it('«Компенсация аренды» — без «Возобновлена» и на экране, и в xlsx', () => {
+    expect(COMPENSATION_COLUMNS.map(column => column.label)).not.toContain('Возобновлена');
+    expect(buildCompensationExport('Ноябрь 2026')([]).columns.map(column => column.label)).not.toContain('Возобновлена');
+  });
+
+  it('архив компенсации: закончившиеся в месяце без приостановленных; начало — первой записи цепочки', () => {
+    const paused = stay({ id: 10, kind: 'apartment', check_in: '2026-09-01', check_out: '2026-10-10', suspended: true });
+    const resumed = stay({ id: 11, kind: 'apartment', check_in: '2026-10-20', check_out: '2026-11-15', resumed_from_id: 10 });
+    const pausedNow = stay({ id: 12, kind: 'apartment', check_in: '2026-09-01', check_out: '2026-11-05', suspended: true });
+    const dormitory = stay({ id: 13, check_out: '2026-11-03' });
+    const rows = compensationArchiveRows([paused, resumed, pausedNow, dormitory], '2026-11', '2026-11-24');
+    expect(rows.map(row => [row.id, row.compensation_start])).toEqual([[11, '2026-09-01']]);
+    expect(COMPENSATION_ARCHIVE_COLUMNS.find(column => column.key === 'check_in')!.text(rows[0])).toBe('01.09.2026');
+    expect(APARTMENT_ARCHIVE_COLUMNS.map(column => column.label)).toEqual(
+      ['Сотрудник', 'Подразделение', 'Квартира', 'Дата въезда', 'Дата выезда', 'Комментарий'],
+    );
+  });
+
+  it('адрес возврата: вкладка, месяц, окно квартиры — читается один раз и убирается, чужие параметры целы', () => {
+    const path = housingBackPath('apartment', '2026-11', 7);
+    expect(path).toBe('/staff-control?tab=dormitory&housing=apartment&month=2026-11&apartment=7');
+    const params = new URLSearchParams(path.split('?')[1]);
+    expect(readHousingReturn(params)).toEqual({ housing: 'apartment', month: '2026-11', apartment: 7 });
+    expect(readHousingReturn(new URLSearchParams('tab=roster&housing=dormitory'))).toEqual({ housing: null, month: null, apartment: null });
+    expect(readHousingReturn(new URLSearchParams('tab=dormitory&apartment=abc')).apartment).toBeNull();
+
+    params.set('q', 'Иванов');
+    expect(stripHousingReturn(params)?.toString()).toBe('q=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2');
+    expect(stripHousingReturn(new URLSearchParams('q=1'))).toBeNull();
   });
 });
 

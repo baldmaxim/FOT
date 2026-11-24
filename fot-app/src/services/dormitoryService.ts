@@ -139,12 +139,56 @@ export interface IPayrollDormitoryStay extends IDormitoryStay {
   can_edit: boolean;
 }
 
+/** Взыскания сотрудника (миграция 378): «Есть» — та же карточка, тот же человек, «Чёрный список»; «Проверьте» — только ФИО. */
+export type PenaltyLevel = 'yes' | 'check';
+
 /** Работающий сотрудник для «Добавить сотрудника». */
 export interface IDormitoryCandidate {
   id: number;
   full_name: string;
   department: string | null;
   position: string | null;
+  /** Уволенные — только в поиске «Истории взысканий». */
+  dismissal_date?: string | null;
+  /** Взыскания — та же проверка, что блок окна «Заселить»; прежний бэкенд поле не присылает. */
+  penalty?: PenaltyLevel | null;
+}
+
+/** Строка «Истории взысканий»: запись списка или «Чёрного списка» пропусков (только чтение). */
+export interface IDormitoryPenaltyRow {
+  /** 'p<id>' — запись списка, 'b<uuid>' — «Чёрный список». */
+  key: string;
+  /** id записи списка; «Чёрный список» — null. */
+  id: number | null;
+  source: 'list' | 'blacklist';
+  /** Нет — запись «Чёрного списка» без карточки. */
+  employee_id: number | null;
+  full_name: string;
+  department: string | null;
+  employment_status: string | null;
+  dismissal_date: string | null;
+  /** YYYY-MM-DD; «Чёрный список» — дата внесения. */
+  penalty_date: string | null;
+  /** Информация; «Чёрный список» — причина. */
+  note: string | null;
+}
+
+export interface IDormitoryPenaltyPayload {
+  penalty_date: string | null;
+  note: string | null;
+}
+
+export interface IPenaltyMatchItem {
+  source: 'list' | 'blacklist';
+  level: PenaltyLevel;
+  full_name: string;
+  penalty_date: string | null;
+  note: string | null;
+}
+
+export interface IPenaltyMatch {
+  level: PenaltyLevel | null;
+  items: IPenaltyMatchItem[];
 }
 
 export interface IDormitoryStayPayload {
@@ -168,6 +212,10 @@ export const DORMITORY_DIRECTORY_KEY = [...DORMITORY_STAYS_KEY, 'directory'] as 
 export const DORMITORY_APARTMENTS_KEY = [...DORMITORY_STAYS_KEY, 'apartments'] as const;
 export const DORMITORY_RESIDENTS_KEY = [...DORMITORY_STAYS_KEY, 'residents'] as const;
 export const DORMITORY_COMPENSATION_KEY = [...DORMITORY_STAYS_KEY, 'compensation'] as const;
+/** Все проживания охвата — «Архив» «Компенсации аренды». */
+export const DORMITORY_ALL_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'all'] as const;
+/** «История взысканий» (миграция 378) и проверка для «Заселить» — под тем же префиксом. */
+export const DORMITORY_PENALTIES_KEY = [...DORMITORY_STAYS_KEY, 'penalties'] as const;
 
 export const dormitoryService = {
   /** «Управление кадрами» → «Проживание»: общежития и квартиры, охват списка кадров. */
@@ -216,6 +264,40 @@ export const dormitoryService = {
       { signal },
     );
     return res.data;
+  },
+
+  /** Поиск с уволенными — «История взысканий» (запись можно завести и уволенному). */
+  searchEmployeesWithDismissed: async (search: string, signal?: AbortSignal): Promise<IDormitoryCandidate[]> => {
+    const res = await apiClient.get<IApiResponse<IDormitoryCandidate[]>>(
+      `/dormitory/employees/search?q=${encodeURIComponent(search)}&with_dismissed=1`,
+      { signal },
+    );
+    return res.data;
+  },
+
+  /** «История взысканий» (миграция 378): список и «Чёрный список» пропусков в охвате. */
+  listPenalties: async (signal?: AbortSignal): Promise<IDormitoryPenaltyRow[]> => {
+    const res = await apiClient.get<IApiResponse<IDormitoryPenaltyRow[]>>('/dormitory/penalties', { signal });
+    return res.data;
+  },
+
+  /** Взыскания сотрудника для окна «Заселить»; вне охвата — ApiError 403. */
+  checkPenalties: async (employeeId: number, signal?: AbortSignal): Promise<IPenaltyMatch> => {
+    const res = await apiClient.get<IApiResponse<IPenaltyMatch>>(`/dormitory/penalties/check?employee_id=${employeeId}`, { signal });
+    return res.data;
+  },
+
+  addPenalty: async (employeeId: number, payload: IDormitoryPenaltyPayload): Promise<void> => {
+    await apiClient.post('/dormitory/penalties', { employee_id: employeeId, ...payload });
+  },
+
+  /** Дата и информация; сотрудник записи не меняется. */
+  updatePenalty: async (id: number, payload: IDormitoryPenaltyPayload): Promise<void> => {
+    await apiClient.patch(`/dormitory/penalties/${id}`, payload);
+  },
+
+  removePenalty: async (id: number): Promise<void> => {
+    await apiClient.delete(`/dormitory/penalties/${id}`);
   },
 
   /** Названия общежитий справочника (миграции 319, 377) — выбор общежития при заселении, правке и переселении. */

@@ -22,6 +22,8 @@ interface IEmployeeSearchFieldProps<T extends IEmployeeSearchCandidate> {
   search: (term: string, signal: AbortSignal) => Promise<T[]>;
   /** Кандидата нельзя выбрать (нет права на сотрудника): строка неактивна. */
   isDisabled?: (employee: T) => boolean;
+  /** Предупреждение в подсказке под ФИО («⚠ Есть взыскания» в «Заселить»); null — без него. */
+  note?: (employee: T) => string | null;
   disabled?: boolean;
   invalid?: boolean;
 }
@@ -35,6 +37,7 @@ export const EmployeeSearchField = <T extends IEmployeeSearchCandidate>({
   onChange,
   search,
   isDisabled,
+  note,
   disabled = false,
   invalid = false,
 }: IEmployeeSearchFieldProps<T>): ReactElement => {
@@ -116,6 +119,7 @@ export const EmployeeSearchField = <T extends IEmployeeSearchCandidate>({
                     {[employee.department, employee.position].filter(Boolean).join(' · ')}
                   </span>
                 )}
+                {note?.(employee) && <span className={styles.note}>{note(employee)}</span>}
               </button>
             </li>
           ))}

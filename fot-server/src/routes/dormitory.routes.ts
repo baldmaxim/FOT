@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { companyApartmentsController as apartments } from '../controllers/company-apartments.controller.js';
 import { dormitoryCompensationPauseController as pause } from '../controllers/dormitory-compensation-pause.controller.js';
 import { dormitoryDirectoryController as directory } from '../controllers/dormitory-directory.controller.js';
+import { dormitoryPenaltiesController as penalties } from '../controllers/dormitory-penalties.controller.js';
 import { dormitoryResidentsController as residents } from '../controllers/dormitory-residents.controller.js';
 import { dormitoryStaysController as c } from '../controllers/dormitory-stays.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
@@ -51,5 +52,11 @@ router.get('/dormitories', dormitoryView, directory.list);
 router.post('/dormitories', dormitoryEdit, directory.add);
 router.patch('/dormitories/:id', dormitoryEdit, directory.update);
 router.delete('/dormitories/:id', dormitoryEdit, directory.remove);
+// Миграция 378: «История взысканий» («Общежитие»); check — для окна «Заселить» (до /:id).
+router.get('/penalties', dormitoryView, penalties.list);
+router.get('/penalties/check', dormitoryEdit, penalties.check);
+router.post('/penalties', dormitoryEdit, penalties.add);
+router.patch('/penalties/:id', dormitoryEdit, penalties.update);
+router.delete('/penalties/:id', dormitoryEdit, penalties.remove);
 
 export default router;

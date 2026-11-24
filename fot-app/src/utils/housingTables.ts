@@ -62,6 +62,54 @@ export const touchesMonth = (stay: Pick<IDormitoryStay, 'check_in' | 'check_out'
   stay.check_in < `${shiftMonth(month, 1)}-01` && (stay.check_out === null || stay.check_out > `${month}-01`)
 );
 
+/**
+ * «Архив» месяца YYYY-MM (24.11.2026): выехавшие в нём — дата выезда (окончания компенсации) с 1-го числа по конец
+ * месяца и не позже сегодня. Как на экране: выезд 01.11 — в ноябре, хотя последний день проживания 31.10.
+ */
+export const closedInMonth = (stay: Pick<IDormitoryStay, 'check_out'>, month: string, today: string): boolean => (
+  stay.check_out !== null
+    && stay.check_out >= `${month}-01`
+    && stay.check_out < `${shiftMonth(month, 1)}-01`
+    && stay.check_out <= today
+);
+
+/** Вкладки «Проживания». */
+export type HousingTab = 'apartment' | 'dormitory' | 'compensation';
+
+/** Параметры адреса возврата из карточки сотрудника: читаются один раз и убираются. */
+const HOUSING_RETURN_PARAMS = ['tab', 'housing', 'month', 'apartment'] as const;
+
+export interface IHousingReturn {
+  housing: string | null;
+  month: string | null;
+  /** Окно жильцов этой квартиры; нет или не число — null. */
+  apartment: number | null;
+}
+
+/** Адрес возврата в «Проживание»: вкладка, месяц и — из окна квартиры — сама квартира. */
+export const housingBackPath = (housing: HousingTab, month: string, apartmentId: number | null = null): string => (
+  `/staff-control?tab=dormitory&housing=${housing}&month=${month}${apartmentId !== null ? `&apartment=${apartmentId}` : ''}`
+);
+
+/** Что пришло в адресе возврата (только вкладка «Проживание», ?tab=dormitory). */
+export const readHousingReturn = (params: URLSearchParams): IHousingReturn => {
+  if (params.get('tab') !== 'dormitory') return { housing: null, month: null, apartment: null };
+  const apartment = Number(params.get('apartment'));
+  return {
+    housing: params.get('housing'),
+    month: params.get('month'),
+    apartment: Number.isInteger(apartment) && apartment > 0 ? apartment : null,
+  };
+};
+
+/** Адрес без параметров возврата (остальные не трогаются); убирать нечего — null. */
+export const stripHousingReturn = (params: URLSearchParams): URLSearchParams | null => {
+  if (!HOUSING_RETURN_PARAMS.some(key => params.has(key))) return null;
+  const next = new URLSearchParams(params);
+  HOUSING_RETURN_PARAMS.forEach(key => next.delete(key));
+  return next;
+};
+
 /** Уволен ли сотрудник записи на сегодня — галочка «Уволенные» в фильтре столбца «Сотрудник». */
 export const isDismissedStay = (stay: IDormitoryStay): boolean => dismissedTone(stay, moscowTodayIso()) !== null;
 
@@ -213,8 +261,8 @@ export const APARTMENT_RESIDENT_COLUMNS: ReadonlyArray<IRegistryColumn<IApartmen
   },
 ];
 
-/** История квартиры и общежития: кто жил и когда. */
-const historyColumns = <Row extends IDormitoryStay>(withPlace: boolean): ReadonlyArray<IRegistryColumn<Row>> => [
+/** История квартиры и общежития: кто жил и когда; placeLabel — столбец места («Общежитие», «Квартира»). */
+const historyColumns = <Row extends IDormitoryStay>(placeLabel: string | null): ReadonlyArray<IRegistryColumn<Row>> => [
   employeeColumn<Row>(),
   {
     key: 'department',
@@ -224,9 +272,9 @@ const historyColumns = <Row extends IDormitoryStay>(withPlace: boolean): Readonl
     text: row => orDash(row.department),
     sortValue: row => row.department,
   },
-  ...(withPlace ? [{
+  ...(placeLabel ? [{
     key: 'address',
-    label: 'Общежитие',
+    label: placeLabel,
     type: 'text' as const,
     width: 180,
     text: (row: Row) => orDash(row.address),
@@ -236,10 +284,28 @@ const historyColumns = <Row extends IDormitoryStay>(withPlace: boolean): Readonl
   dateColumn<Row>('check_out', 'Дата выезда', row => row.check_out),
 ];
 
-export const APARTMENT_HISTORY_COLUMNS = historyColumns<IApartmentResident>(false);
+/** Комментарий записи — в архивах: при переселении он остаётся у прежней. */
+const commentColumn = <Row extends IDormitoryStay>(): IRegistryColumn<Row> => ({
+  key: 'comment',
+  label: 'Комментарий',
+  type: 'text',
+  width: 160,
+  text: row => row.comment ?? '',
+  sortValue: row => row.comment ?? null,
+});
+
+export const APARTMENT_HISTORY_COLUMNS = historyColumns<IApartmentResident>(null);
 
 export const buildApartmentResidentsExport = (title: string) => exportOf(title, APARTMENT_RESIDENT_COLUMNS);
 export const buildApartmentHistoryExport = (title: string) => exportOf(`${title} — история`, APARTMENT_HISTORY_COLUMNS);
+
+/** «Архив» вкладки «Квартира»: выехавшие в месяце из всех служебных квартир. */
+export const APARTMENT_ARCHIVE_COLUMNS: ReadonlyArray<IRegistryColumn<IApartmentResident>> = [
+  ...historyColumns<IApartmentResident>('Квартира'),
+  commentColumn<IApartmentResident>(),
+];
+
+export const buildApartmentArchiveExport = (monthLabel: string) => exportOf(`Квартиры — архив ${monthLabel}`, APARTMENT_ARCHIVE_COLUMNS);
 
 // ── «Общежитие» ───────────────────────────────────────────────────────────────
 
@@ -313,17 +379,10 @@ export const dormitoryResidentColumns = (withPlace: boolean): ReadonlyArray<IReg
   },
 ];
 
-/** История общежития — и комментарий записи: при переселении он остаётся у прежней. */
-export const DORMITORY_HISTORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryResident>> = [
-  ...historyColumns<IDormitoryResident>(true),
-  {
-    key: 'comment',
-    label: 'Комментарий',
-    type: 'text',
-    width: 160,
-    text: resident => resident.comment ?? '',
-    sortValue: resident => resident.comment ?? null,
-  },
+/** «Архив» общежития (выехавшие в месяце) — и комментарий записи: при переселении он остаётся у прежней. */
+export const DORMITORY_ARCHIVE_COLUMNS: ReadonlyArray<IRegistryColumn<IDormitoryResident>> = [
+  ...historyColumns<IDormitoryResident>('Общежитие'),
+  commentColumn<IDormitoryResident>(),
 ];
 
 /** Справочник общежитий (миграция 377) — как «Общежития» 1С: Дата, Номер, Общежитие, Стоимость места (справочно). */
@@ -361,7 +420,9 @@ export const DORMITORY_DIRECTORY_COLUMNS: ReadonlyArray<IRegistryColumn<IDormito
 export const buildDormitoryDirectoryExport = exportOf('Общежития', DORMITORY_DIRECTORY_COLUMNS);
 
 export const buildDormitoryResidentsExport = (title: string, withPlace: boolean) => exportOf(title, dormitoryResidentColumns(withPlace));
-export const buildDormitoryHistoryExport = (title: string) => exportOf(`${title} — история`, DORMITORY_HISTORY_COLUMNS);
+export const buildDormitoryArchiveExport = (title: string, monthLabel: string) => (
+  exportOf(`${title} — архив ${monthLabel}`, DORMITORY_ARCHIVE_COLUMNS)
+);
 
 // ── «Компенсация аренды» ──────────────────────────────────────────────────────
 
@@ -389,9 +450,8 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
   // Ширина — под самое длинное слово подписи («КОМПЕНСАЦИИ», «ОБНОВЛЕНО») со стрелкой и воронкой.
   // Начало — первой записи цепочки «пауза → возобновление» (миграция 374).
   dateColumn<ICompensationMonthRow>('check_in', 'Начало компенсации', row => row.compensation_start ?? row.check_in, 160),
-  // Подпись в одно слово не переносится: ширина — под неё со стрелкой и воронкой.
+  // Подпись в одно слово не переносится: ширина — под неё со стрелкой и воронкой. «Возобновлена» убрана 24.11.2026.
   dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', row => row.paused_from, 188),
-  dateColumn<ICompensationMonthRow>('resumed_from', 'Возобновлена', row => row.resumed_from, 172),
   dateColumn<ICompensationMonthRow>('updated_at', 'Обновлено', row => row.updated_at?.slice(0, 10) ?? null, 144),
   {
     key: 'weekend_days',
@@ -489,3 +549,62 @@ export const buildCompensationExport = (monthLabel: string) => (
     ...(totals ? { totals } : {}),
   });
 };
+
+/** Строка «Архива» компенсации: закончившаяся в месяце запись и начало её цепочки «пауза → возобновление». */
+export interface ICompensationArchiveRow extends IDormitoryStay {
+  /** Въезд первой записи цепочки (миграция 374). */
+  compensation_start: string;
+}
+
+/**
+ * «Архив» «Компенсации аренды» за месяц: компенсации (вид apartment), закончившиеся в месяце (closedInMonth), без
+ * приостановленных — они остаются в списке месяца. Начало — первой записи цепочки по resumed_from_id.
+ */
+export const compensationArchiveRows = (
+  stays: ReadonlyArray<IDormitoryStay>,
+  month: string,
+  today: string,
+): ICompensationArchiveRow[] => {
+  const byId = new Map(stays.map(stay => [stay.id, stay]));
+  const chainStart = (stay: IDormitoryStay): string => {
+    let current = stay;
+    const seen = new Set<number>([stay.id]);
+    while (current.resumed_from_id) {
+      const previous = byId.get(current.resumed_from_id);
+      if (!previous || seen.has(previous.id)) break;
+      seen.add(previous.id);
+      current = previous;
+    }
+    return current.check_in;
+  };
+  return stays
+    .filter(stay => stay.kind === 'apartment' && !stay.suspended && closedInMonth(stay, month, today))
+    .map(stay => ({ ...stay, compensation_start: chainStart(stay) }));
+};
+
+export const COMPENSATION_ARCHIVE_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationArchiveRow>> = [
+  employeeColumn<ICompensationArchiveRow>(),
+  {
+    key: 'position',
+    label: 'Должность',
+    type: 'text',
+    width: 160,
+    text: row => orDash(row.position),
+    sortValue: row => row.position,
+  },
+  {
+    key: 'department',
+    label: 'Подразделение',
+    type: 'text',
+    width: 160,
+    text: row => orDash(row.department),
+    sortValue: row => row.department,
+  },
+  dateColumn<ICompensationArchiveRow>('check_in', 'Начало компенсации', row => row.compensation_start, 160),
+  dateColumn<ICompensationArchiveRow>('check_out', 'Окончание', row => row.check_out, 128),
+  commentColumn<ICompensationArchiveRow>(),
+];
+
+export const buildCompensationArchiveExport = (monthLabel: string) => (
+  exportOf(`Компенсация аренды — архив ${monthLabel}`, COMPENSATION_ARCHIVE_COLUMNS)
+);

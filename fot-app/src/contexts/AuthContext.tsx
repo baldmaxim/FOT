@@ -14,6 +14,7 @@ import { presenceByObjectQueryKey } from '../hooks/useEmployeeDirectory';
 import { useRealtimeQueryInvalidation } from '../hooks/useRealtimeQueryInvalidation';
 import type { RoleLabel } from '../services/rolesService';
 import { profileCanEditPage, profileCanViewPage } from '../utils/pageAccess';
+import { browserSessionStorage, clearSessionStates } from '../utils/sessionState';
 import type {
   User,
   UserProfile,
@@ -214,6 +215,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessionToken(null);
     setToken(null);
     sessionStorage.removeItem('2fa_verified');
+    // Режимы, поиск и фильтры экранов («Проживание») — следующей учётке в этой вкладке не достаются.
+    clearSessionStates(browserSessionStorage());
     setRoles([]);
     setState({ ...initialState, loading: false });
   }, []);

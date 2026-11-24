@@ -219,16 +219,21 @@ export const applyTableView = <Row,>(
     .map(item => item.row);
 };
 
+/** Пустая ячейка в фильтре: «—» или пусто — по показанному тексту, а не по значению сортировки. */
+export const isEmptyFilterValue = (value: string): boolean => value.trim() === '' || value.trim() === '—';
+
 /**
  * Варианты фильтра столбца со счётчиками — по строкам, прошедшим фильтры ОСТАЛЬНЫХ столбцов
  * (как у кадров). Выбранные значения, которых в строках больше нет, остаются в списке с нулём:
- * иначе снять такую галочку было бы нечем.
+ * иначе снять такую галочку было бы нечем. emptyFirst — «—» и пусто первыми («Проживание»: сначала «—», затем
+ * даты); выбранное исчезнувшее значение по-прежнему в конце.
  */
 export const columnFilterOptions = <Row,>(
   rows: ReadonlyArray<Row>,
   columns: ReadonlyArray<ITableColumn<Row>>,
   filters: Record<string, string[]>,
   key: string,
+  options: { emptyFirst?: boolean } = {},
 ): IFilterOption[] => {
   const column = columns.find(item => item.key === key);
   if (!column) return [];
@@ -247,9 +252,24 @@ export const columnFilterOptions = <Row,>(
     if (!entries.has(value)) entries.set(value, { count: 0, sort: null });
   }
 
+  const emptyRank = (value: string): number => (options.emptyFirst && isEmptyFilterValue(value) ? 0 : 1);
   return [...entries.entries()]
-    .sort(([, a], [, b]) => compareSortEntries(a.sort, b.sort, 1))
+    .sort(([aValue, a], [bValue, b]) => emptyRank(aValue) - emptyRank(bValue) || compareSortEntries(a.sort, b.sort, 1))
     .map(([value, entry]) => ({ value, count: entry.count }));
+};
+
+/** Сохранённый вид таблицы (sessionStorage): сортировка и фильтры; чужая форма — null. */
+export const parseTableView = (raw: unknown): ITableView | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const { sort, dir, filters } = raw as Record<string, unknown>;
+  if (typeof sort !== 'string' || (dir !== 'asc' && dir !== 'desc')) return null;
+  if (!filters || typeof filters !== 'object' || Array.isArray(filters)) return null;
+  const parsed: Record<string, string[]> = {};
+  for (const [key, values] of Object.entries(filters as Record<string, unknown>)) {
+    if (!Array.isArray(values) || !values.every(value => typeof value === 'string')) return null;
+    if (values.length > 0) parsed[key] = values as string[];
+  }
+  return { sort, dir, filters: parsed };
 };
 
 export const isColumnFiltered = (view: ITableView, key: string): boolean =>

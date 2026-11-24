@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactElement, type ReactNode } from 'react';
 import { Download, UserPlus, type LucideIcon } from 'lucide-react';
 
 import { useColumnWidths } from '../../../hooks/useColumnWidths';
+import { useSessionState } from '../../../hooks/useSessionState';
 import { useSnapshotExport } from '../../../hooks/useSnapshotExport';
 import { searchRowsByFio } from '../../../utils/fioSearch';
 import {
-  applyTableView, matchesNameSearch, type IRegistryColumn, type ITableExportSnapshot, type ITableView,
+  applyTableView, matchesNameSearch, parseTableView, type IRegistryColumn, type ITableExportSnapshot, type ITableView,
 } from '../../../utils/tableView';
 import { MonthsPicker } from '../MonthsPicker';
 import { SearchInput } from '../SearchInput';
@@ -13,6 +14,21 @@ import { RegistryTable, type IRegistryTableProps } from './RegistryTable';
 import styles from './RegistryPanel.module.css';
 
 const DEFAULT_VIEW: ITableView = { sort: 'full_name', dir: 'asc', filters: {} };
+
+/** Что переживает уход в карточку сотрудника (viewKey): сортировка, фильтры столбцов, поиск, галочка «Уволенные». */
+interface IRegistryPanelState {
+  view: ITableView;
+  search: string;
+  showDismissed: boolean;
+}
+
+const parsePanelState = (raw: unknown): IRegistryPanelState | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const { view, search, showDismissed } = raw as Record<string, unknown>;
+  const parsedView = parseTableView(view);
+  if (!parsedView || typeof search !== 'string' || typeof showDismissed !== 'boolean') return null;
+  return { view: parsedView, search, showDismissed };
+};
 
 /** Итог видимых строк: текст в строке «Итого» таблицы и значения той же строки в xlsx (ключ — столбец). */
 export interface IRegistryTotals {
@@ -77,6 +93,11 @@ interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
   columnWidthsKey?: string;
   /** Передан — в фильтре столбца «Сотрудник» галочка «Уволенные» (по умолчанию показаны): уволен ли сотрудник строки. */
   isDismissed?: (row: Row) => boolean;
+  /**
+   * Передан — сортировка, фильтры столбцов, поиск и «Уволенные» хранятся в sessionStorage по этому ключу (у каждой
+   * учётки свои, при выходе стираются): переживают уход в карточку сотрудника и пересоздание таблицы («Проживание»).
+   */
+  viewKey?: string;
 }
 
 /**
@@ -87,13 +108,22 @@ interface IRegistryPanelProps<Row, Snapshot = ITableExportSnapshot>
 export const RegistryPanel = <Row, Snapshot = ITableExportSnapshot>({
   rows, isLoading, isError, onRetry, searchText, fioSearch = false, searchPlaceholder = 'Поиск по ФИО...', buildExport, sendExport, onAdd,
   addLabel = 'Добавить сотрудника',
-  initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, columnWidthsKey, isDismissed, ...tableProps
+  initialView = DEFAULT_VIEW, months, totals, toolbarAction, searchAside, columnWidthsKey, isDismissed, viewKey, ...tableProps
 }: IRegistryPanelProps<Row, Snapshot>): ReactElement => {
   const { columns } = tableProps;
   const { widths: columnWidths, setWidth: setColumnWidth } = useColumnWidths(columnWidthsKey);
-  const [search, setSearch] = useState('');
-  const [view, setView] = useState<ITableView>(initialView);
-  const [showDismissed, setShowDismissed] = useState(true);
+  const [panelState, setPanelState] = useSessionState<IRegistryPanelState>(
+    viewKey ? `registry-view:${viewKey}` : null,
+    () => ({ view: initialView, search: '', showDismissed: true }),
+    { parse: parsePanelState },
+  );
+  const { view, search, showDismissed } = panelState;
+  const setSearch = useCallback((next: string) => setPanelState(prev => ({ ...prev, search: next })), [setPanelState]);
+  const setView = useCallback((next: ITableView) => setPanelState(prev => ({ ...prev, view: next })), [setPanelState]);
+  const setShowDismissed = useCallback(
+    (next: boolean) => setPanelState(prev => ({ ...prev, showDismissed: next })),
+    [setPanelState],
+  );
   // Итог считается из тех же строк, что уходят в снимок, — экран и xlsx не расходятся.
   const buildSnapshot = (exported: ReadonlyArray<Row>) => buildExport(exported, totals?.(exported)?.export);
   const { exporting, exportRows } = useSnapshotExport(buildSnapshot, sendExport);

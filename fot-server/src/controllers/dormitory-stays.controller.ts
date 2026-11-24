@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
 import { DormitoryNotInDirectoryError } from '../services/dormitory-directory.service.js';
+import { penaltyMatches } from '../services/dormitory-penalties.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import {
   addStay,
@@ -55,6 +56,8 @@ import { sendTableSnapshotXlsx } from './table-snapshot-export.js';
 
 const DORMITORY_SHEET = { sheetName: 'Проживание', tableName: 'Housing' } as const;
 const PAYROLL_AUDIT_SOURCE = 'payroll_dormitory_registry';
+/** Поиск с уволенными любой даты увольнения («История взысканий»). */
+const ANY_DISMISSAL_DATE = '1900-01-01';
 
 const NOT_FOUND = { success: false, error: 'Запись не найдена' };
 const NO_ACCESS = { success: false, error: 'Нет доступа к сотруднику' };
@@ -128,7 +131,10 @@ const listForPayroll = async (req: AuthenticatedRequest, res: Response): Promise
   }
 };
 
-/** GET /api/dormitory/employees/search?q= — кого добавить: работающие в охвате, от 2 символов. */
+/**
+ * GET /api/dormitory/employees/search?q=[&with_dismissed=1] — кого добавить: работающие в охвате, от 2 символов
+ * (with_dismissed — и уволенные: «История взысканий»); у кандидата penalty — 'yes' | 'check' | null (миграция 378).
+ */
 const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const search = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -136,7 +142,18 @@ const searchEmployees = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    res.json({ success: true, data: await searchCandidates(search, await rosterEmployeeIds(req)) });
+    // with_dismissed=1 — «История взысканий»: запись можно завести и уволенному.
+    const withDismissed = req.query.with_dismissed === '1';
+    const scopeIds = await rosterEmployeeIds(req);
+    const candidates = withDismissed
+      ? await searchCandidates(search, scopeIds, { dismissedFrom: ANY_DISMISSAL_DATE })
+      : await searchCandidates(search, scopeIds);
+    // Пометка взысканий в подсказке — та же проверка, что блок окна «Заселить» после выбора (миграция 378).
+    const penalties = await penaltyMatches(candidates.map(candidate => candidate.id));
+    res.json({
+      success: true,
+      data: candidates.map(candidate => ({ ...candidate, penalty: penalties.get(candidate.id)?.level ?? null })),
+    });
   } catch (err) {
     console.error('dormitory.searchEmployees error:', err);
     res.status(500).json({ success: false, error: 'Ошибка поиска' });

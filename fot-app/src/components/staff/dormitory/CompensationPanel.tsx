@@ -1,9 +1,11 @@
-import { useState, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import { useToast } from '../../../contexts/ToastContext';
+import { useSessionState } from '../../../hooks/useSessionState';
 import {
+  DORMITORY_ALL_STAYS_KEY,
   DORMITORY_COMPENSATION_KEY,
   dormitoryService,
   type ICompensationMonthRow,
@@ -11,15 +13,23 @@ import {
 import { getMonthLabel } from '../../../utils/calendarUtils';
 import { formatDate } from '../../../utils/formatMoney';
 import {
+  buildCompensationArchiveExport,
   buildCompensationExport,
+  COMPENSATION_ARCHIVE_COLUMNS,
   COMPENSATION_COLUMNS,
+  compensationArchiveRows,
   compensationTone,
   compensationTotals,
+  dismissedTone,
   isDismissedStay,
+  type ICompensationArchiveRow,
 } from '../../../utils/housingTables';
 import { moscowTodayIso } from '../../../utils/moscowDate';
+import { parseOneOf } from '../../../utils/sessionState';
+import type { ITableView } from '../../../utils/tableView';
 import { RegistryPanel } from '../../ui/registry/RegistryPanel';
 import { CompensationPauseModal, type CompensationPauseAction } from './CompensationPauseModal';
+import styles from './DormitoryTab.module.css';
 import { DormitoryStayModal } from './DormitoryStayModal';
 import { useEmployeeCardCell } from './useEmployeeCardCell';
 
@@ -55,14 +65,21 @@ const PAUSE_LABELS: Record<CompensationPauseAction, string> = {
 
 const rowKey = (row: ICompensationMonthRow): number => row.id;
 const rowName = (row: ICompensationMonthRow): string => row.full_name;
+const archiveKey = (row: ICompensationArchiveRow): number => row.id;
+const archiveName = (row: ICompensationArchiveRow): string => row.full_name;
+const BY_END: ITableView = { sort: 'check_out', dir: 'desc', filters: {} };
+
+type CompensationMode = 'list' | 'archive';
+const parseMode = parseOneOf<CompensationMode>(['list', 'archive']);
 
 /**
  * Вкладка «Компенсация аренды» (миграции 371, 374) — как документ 1С «Список сотрудников для получения возмещения за
  * проживание» за выбранный месяц: №, Сотрудник (ссылка на карточку), Должность, Подразделение (на конец месяца),
- * Начало компенсации, Приостановлена, Возобновлена, Обновлено, Кол-во выходных, Кол-во дней (табель), Сумма к оплате,
- * Комментарий, Гражданство; «Итого»; ширина столбцов — как в Excel. Дни и сумма — из того же расчёта, что «Зарплата»
- * (630 ₽/день); уволенные подсвечены (галочка «Уволенные» скрывает), в бригаде — жёлтым. С правом правки —
- * «Добавить сотрудника», ✎ (даты, комментарий, «Приостановить…» / «Возобновить…»), 🗑 — ошибочная запись.
+ * Начало компенсации, Приостановлена, Обновлено, Кол-во выходных, Кол-во дней (табель), Сумма к оплате, Комментарий,
+ * Гражданство; «Итого»; ширина столбцов — как в Excel. Дни и сумма — из того же расчёта, что «Зарплата» (630 ₽/день);
+ * уволенные подсвечены (галочка «Уволенные» скрывает), в бригаде — жёлтым. С правом правки — «Добавить сотрудника», ✎
+ * (даты, комментарий, «Приостановить…» / «Возобновить…»), 🗑 — ошибочная запись. «Архив» (24.11.2026) — компенсации,
+ * закончившиеся в выбранном месяце (без приостановленных), только просмотр.
  */
 export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, month, cardBackPath, onChanged }) => {
   const toast = useToast();
@@ -73,11 +90,26 @@ export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, month,
   const monthLabel = getMonthLabel(year, monthNumber);
   const today = moscowTodayIso();
 
+  const [mode, setMode] = useSessionState<CompensationMode>('housing.compensation.mode', 'list', { parse: parseMode });
+  const archive = mode === 'archive';
+
   const query = useQuery({
     queryKey: [...DORMITORY_COMPENSATION_KEY, month],
     queryFn: ({ signal }) => dormitoryService.listCompensation(month, signal),
     staleTime: 0,
+    enabled: !archive,
   });
+  const archiveQuery = useQuery({
+    queryKey: DORMITORY_ALL_STAYS_KEY,
+    queryFn: ({ signal }) => dormitoryService.list(signal),
+    staleTime: 0,
+    enabled: archive,
+  });
+  const archiveRows = useMemo(
+    () => (archiveQuery.data ? compensationArchiveRows(archiveQuery.data, month, today) : undefined),
+    [archiveQuery.data, month, today],
+  );
+  const archiveCardCell = useEmployeeCardCell<ICompensationArchiveRow>(cardBackPath);
 
   const remove = async (row: ICompensationMonthRow) => {
     if (busyId !== null) return;
@@ -93,9 +125,51 @@ export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, month,
     }
   };
 
+  const aside = () => (
+    <div className={styles.aside}>
+      <button
+        type="button"
+        className={styles.toggle}
+        aria-pressed={archive}
+        onClick={() => setMode(archive ? 'list' : 'archive')}
+      >
+        Архив
+      </button>
+    </div>
+  );
+
+  if (archive) {
+    return (
+      <RegistryPanel
+        key="archive"
+        label={`Компенсация аренды — архив, ${monthLabel}`}
+        columns={COMPENSATION_ARCHIVE_COLUMNS}
+        rows={archiveRows}
+        isLoading={archiveQuery.isLoading}
+        isError={archiveQuery.isError}
+        onRetry={() => { void archiveQuery.refetch(); }}
+        rowKey={archiveKey}
+        rowLabel={archiveName}
+        searchText={archiveName}
+        fioSearch
+        initialView={BY_END}
+        searchAside={aside}
+        columnWidthsKey="housing.compensation-archive"
+        viewKey="housing.compensation.archive"
+        emptyFilterFirst
+        isDismissed={isDismissedStay}
+        cellRenderers={archiveCardCell}
+        buildExport={buildCompensationArchiveExport(monthLabel)}
+        sendExport={dormitoryService.exportTable}
+        rowTone={row => dismissedTone(row, today)}
+      />
+    );
+  }
+
   return (
     <>
       <RegistryPanel
+        key="list"
         label={`Компенсация аренды — ${monthLabel}`}
         columns={COMPENSATION_COLUMNS}
         rows={query.data}
@@ -107,6 +181,9 @@ export const CompensationPanel: FC<ICompensationPanelProps> = ({ canEdit, month,
         searchText={rowName}
         fioSearch
         columnWidthsKey="housing.compensation"
+        viewKey="housing.compensation"
+        emptyFilterFirst
+        searchAside={aside}
         isDismissed={isDismissedStay}
         cellRenderers={cardCell}
         totals={compensationTotals}

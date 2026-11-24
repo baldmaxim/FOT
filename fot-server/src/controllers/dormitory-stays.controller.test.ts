@@ -43,6 +43,10 @@ vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
 vi.mock('../services/staff-tab-access.service.js', () => grant);
 
+// Пометка взысканий в подсказке поиска (миграция 378).
+const penaltiesSvc = vi.hoisted(() => ({ penaltyMatches: vi.fn(async (..._args: unknown[]) => new Map()) }));
+vi.mock('../services/dormitory-penalties.service.js', () => penaltiesSvc);
+
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { dormitoryStaysController as c } from './dormitory-stays.controller.js';
 
@@ -134,7 +138,21 @@ describe('список', () => {
     const res = makeRes();
     await c.searchEmployees(makeReq({ query: { q: 'Кар' } }), res);
     expect(svc.searchCandidates).toHaveBeenCalledWith('Кар', null);
-    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data).toEqual([{ id: 42, full_name: 'Каримов Акмал', department: null, position: null, penalty: null }]);
+  });
+
+  it('поиск: пометка взысканий — из той же проверки, что окно «Заселить»; with_dismissed — и уволенные', async () => {
+    scope.resolveStaffRosterEmployeeIds.mockResolvedValue(new Set([42, 43]));
+    svc.searchCandidates.mockResolvedValue([
+      { id: 42, full_name: 'Каримов Акмал', department: null, position: null },
+      { id: 43, full_name: 'Каримов Бахтиёр', department: null, position: null },
+    ]);
+    penaltiesSvc.penaltyMatches.mockResolvedValueOnce(new Map([[42, { level: 'yes', items: [] }]]));
+    const res = makeRes();
+    await c.searchEmployees(makeReq({ query: { q: 'Кар', with_dismissed: '1' } }), res);
+    expect(svc.searchCandidates).toHaveBeenLastCalledWith('Кар', [42, 43], { dismissedFrom: '1900-01-01' });
+    expect(penaltiesSvc.penaltyMatches).toHaveBeenLastCalledWith([42, 43]);
+    expect(res.body.data.map((row: { penalty: string | null }) => row.penalty)).toEqual(['yes', null]);
   });
 });
 

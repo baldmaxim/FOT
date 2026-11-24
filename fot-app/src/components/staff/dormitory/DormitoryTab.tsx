@@ -1,8 +1,9 @@
-import { useId, useMemo, useState, type FC } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '../../../contexts/AuthContext';
+import { useSessionState } from '../../../hooks/useSessionState';
 import {
   DORMITORY_ADDRESSES_KEY,
   DORMITORY_STAYS_KEY,
@@ -10,7 +11,13 @@ import {
 } from '../../../services/dormitoryService';
 import { PAYROLL_TERMS_PREFIX } from '../../../services/payrollRegistryService';
 import { dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
-import { housingMonthOptions } from '../../../utils/housingTables';
+import {
+  housingBackPath,
+  housingMonthOptions,
+  readHousingReturn,
+  stripHousingReturn,
+  type HousingTab,
+} from '../../../utils/housingTables';
 import { moscowTodayIso } from '../../../utils/moscowDate';
 import { MonthSelect } from '../../ui/MonthSelect';
 import { RegistryTabs, type IRegistryTab } from '../../ui/registry/RegistryTabs';
@@ -20,15 +27,14 @@ import { CompensationPanel } from './CompensationPanel';
 import { DormitoryResidentsPanel } from './DormitoryResidentsPanel';
 import styles from './DormitoryTab.module.css';
 
-type HousingTab = 'apartment' | 'dormitory' | 'compensation';
-
 const HOUSING_TABS: ReadonlyArray<IRegistryTab<HousingTab>> = [
   { key: 'apartment', label: 'Квартира' },
   { key: 'dormitory', label: 'Общежитие' },
   { key: 'compensation', label: 'Компенсация аренды' },
 ];
 
-const isHousingTab = (value: string | null): value is HousingTab => HOUSING_TABS.some(item => item.key === value);
+const isHousingTab = (value: unknown): value is HousingTab => HOUSING_TABS.some(item => item.key === value);
+const parseHousingTab = (raw: unknown): HousingTab | null => (isHousingTab(raw) ? raw : null);
 
 /** «Кв. …» — адрес служебной квартиры, общежитию его не подсказываем (миграция 371). */
 const isFlatAddress = (address: string): boolean => /^\s*кв[.\s]/i.test(address);
@@ -37,27 +43,40 @@ const isFlatAddress = (address: string): boolean => /^\s*кв[.\s]/i.test(addres
  * «Управление кадрами» → «Проживание» (миграции 314, 320, 371, 374): вкладки «Квартира» (служебные квартиры компании,
  * как «Учёт квартир» 1С), «Общежитие» (как отчёт «Проживающие в общежитии последний вход (СКД)») и «Компенсация
  * аренды» (630 ₽/день — те же записи, что «Доплата → Квартира» «Зарплаты»). Один выбор месяца на все вкладки — справа
- * от вкладок (на телефоне — строкой ниже); вкладка и месяц читаются из адреса при открытии (?housing=…&month=… —
- * возврат из карточки сотрудника). Вкладка загружается при первом открытии и дальше остаётся смонтированной (поиск и
- * фильтры целы); таблица прокручивается внутри — шапка закреплена.
+ * от вкладок (на телефоне — строкой ниже). Вкладка и месяц живут в sessionStorage (useSessionState): переживают уход в
+ * карточку сотрудника и смену вкладок раздела. Адрес возврата из карточки (?tab=dormitory&housing=…&month=…&apartment=…)
+ * важнее сохранённого, читается один раз и убирается — старый месяц из адреса не перебьёт выбранный позже. Вкладка
+ * загружается при первом открытии и дальше остаётся смонтированной; таблица прокручивается внутри — шапка закреплена.
  */
 export const DormitoryTab: FC = () => {
   const { isAdmin, canEditPage } = useAuth();
   const canEdit = isAdmin || canEditPage('/staff-control/dormitory');
   const queryClient = useQueryClient();
   const baseId = useId();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const currentMonth = moscowTodayIso().slice(0, 7);
   const monthOptions = useMemo(() => housingMonthOptions(currentMonth), [currentMonth]);
-  const [tab, setTab] = useState<HousingTab>(() => {
-    const requested = searchParams.get('housing');
-    return isHousingTab(requested) ? requested : 'apartment';
+  // Возврат из карточки: адрес — один раз, при открытии раздела.
+  const [returned] = useState(() => readHousingReturn(searchParams));
+  const isMonthOption = (value: unknown): value is string => typeof value === 'string' && monthOptions.includes(value);
+  const [tab, setTab] = useSessionState<HousingTab>('housing.tab', 'apartment', {
+    parse: parseHousingTab,
+    override: parseHousingTab(returned.housing),
   });
-  const [month, setMonth] = useState(() => {
-    const requested = searchParams.get('month');
-    return requested && monthOptions.includes(requested) ? requested : currentMonth;
+  const [month, setMonth] = useSessionState<string>('housing.month', currentMonth, {
+    parse: raw => (isMonthOption(raw) ? raw : null),
+    override: isMonthOption(returned.month) ? returned.month : null,
   });
   const [visited, setVisited] = useState<ReadonlySet<HousingTab>>(() => new Set([tab]));
+
+  // Параметры возврата прочитаны — убрать из адреса (replace): окно квартиры не откроется само при следующем заходе.
+  const stripped = useRef(false);
+  useEffect(() => {
+    if (stripped.current) return;
+    stripped.current = true;
+    const next = stripHousingReturn(searchParams);
+    if (next) setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const changeTab = (next: HousingTab) => {
     setTab(next);
@@ -84,7 +103,7 @@ export const DormitoryTab: FC = () => {
   };
 
   /** Адрес возврата из карточки сотрудника: эта вкладка и месяц. */
-  const cardBackPath = (key: HousingTab) => `/staff-control?tab=dormitory&housing=${key}&month=${month}`;
+  const cardBackPath = (key: HousingTab) => housingBackPath(key, month);
 
   const tabId = (key: HousingTab) => `${baseId}-tab-${key}`;
   const panelId = (key: HousingTab) => `${baseId}-panel-${key}`;
@@ -119,7 +138,7 @@ export const DormitoryTab: FC = () => {
             canEdit={canEdit}
             addresses={addresses}
             month={month}
-            cardBackPath={cardBackPath('apartment')}
+            initialOpenedId={returned.apartment}
             onChanged={refresh}
           />
         )}

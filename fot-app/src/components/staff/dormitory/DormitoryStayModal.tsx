@@ -1,13 +1,16 @@
 import { useId, useState, type FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import {
+  DORMITORY_PENALTIES_KEY,
   dormitoryService,
   type DormitoryStayKind,
   type IDormitoryCandidate,
   type IDormitoryStay,
   type IDormitoryStayPayload,
 } from '../../../services/dormitoryService';
+import { penaltyCandidateNote } from '../../../utils/dormitoryPenalties';
 import {
   DORMITORY_ADDRESS_MAX_LENGTH,
   DORMITORY_STAY_KIND_LABELS,
@@ -20,6 +23,7 @@ import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 import { DormitorySelect } from './DormitorySelect';
+import { PenaltyWarning } from './PenaltyWarning';
 
 /** Заселение из «Зарплаты» («Справочник» → «Общежитие»): только общежитие, свои поиск и запись. */
 export interface IDormitoryStayModalPayroll {
@@ -50,6 +54,11 @@ interface IDormitoryStayModalProps {
   raised?: boolean;
   /** Поле «Комментарий» (вкладка «Компенсация аренды»): сохраняется частичной правкой записи. */
   withComment?: boolean;
+  /**
+   * «Заселить» общежития (миграция 378): в подсказке поиска — пометка взысканий, после выбора — их список. Только
+   * предупреждение: сохранить можно.
+   */
+  penaltyCheck?: boolean;
   onClose: () => void;
   onSaved: (stay: IDormitoryStay) => void;
 }
@@ -67,7 +76,7 @@ const COMMENT_MAX_LENGTH = 500;
  */
 export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   stay, addresses, initialAddress, payroll, fixedKind, apartment, onMove, moveLabel = 'Переселить в другое общежитие или квартиру…',
-  extraAction, raised = false, withComment = false, onClose, onSaved,
+  extraAction, raised = false, withComment = false, penaltyCheck = false, onClose, onSaved,
 }) => {
   const errorId = useId();
   const addressId = useId();
@@ -83,6 +92,13 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   const isApartment = kind === 'apartment';
   const [error, setError] = useState<{ field: DormitoryStayField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const checkPenalties = penaltyCheck && !isEdit && employee !== null;
+  const penaltyQuery = useQuery({
+    queryKey: [...DORMITORY_PENALTIES_KEY, 'check', employee?.id ?? 0],
+    queryFn: ({ signal }) => dormitoryService.checkPenalties(employee!.id, signal),
+    enabled: checkPenalties,
+    staleTime: 0,
+  });
 
   const clearError = () => setError(null);
   const invalid = (field: DormitoryStayField): true | undefined => (error?.field === field ? true : undefined);
@@ -151,10 +167,12 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             value={employee}
             onChange={value => { setEmployee(value); clearError(); }}
             search={payroll?.search ?? dormitoryService.searchEmployees}
+            {...(penaltyCheck ? { note: penaltyCandidateNote } : {})}
             disabled={saving}
             invalid={error?.field === 'employee'}
           />
         )}
+        {checkPenalties && penaltyQuery.data?.level && <PenaltyWarning match={penaltyQuery.data} />}
       </div>
 
       {!isEdit && !payroll && !fixedKind && !apartment && (

@@ -322,6 +322,10 @@ export const AUDIT_ACTIONS = {
   DORMITORY_ADDED: 'DORMITORY_ADDED',
   DORMITORY_UPDATED: 'DORMITORY_UPDATED',
   DORMITORY_DELETED: 'DORMITORY_DELETED',
+  // «История взысканий» «Общежития» (миграция 378): запись — добавлена, изменена (было → стало), удалена.
+  DORMITORY_PENALTY_ADDED: 'DORMITORY_PENALTY_ADDED',
+  DORMITORY_PENALTY_UPDATED: 'DORMITORY_PENALTY_UPDATED',
+  DORMITORY_PENALTY_DELETED: 'DORMITORY_PENALTY_DELETED',
   // «Удержания» кадров (миграция 318): удержание сотрудника — добавлено, изменено (было → стало), удалено.
   STAFF_DEDUCTION_ADDED: 'STAFF_DEDUCTION_ADDED',
   STAFF_DEDUCTION_UPDATED: 'STAFF_DEDUCTION_UPDATED',
