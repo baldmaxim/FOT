@@ -91,6 +91,28 @@ export const housingBackPath = (housing: HousingTab, month: string, apartmentId:
   `/staff-control?tab=dormitory&housing=${housing}&month=${month}${apartmentId !== null ? `&apartment=${apartmentId}` : ''}`
 );
 
+/** Выбранный месяц «Проживания» в sessionStorage — вместе с текущим месяцем на момент выбора. */
+export interface ISavedHousingMonth {
+  month: string;
+  savedIn: string;
+}
+
+/**
+ * Сохранённый месяц действует только в том календарном месяце, когда его выбрали: после смены месяца (вкладка браузера
+ * или PWA открыты с прошлого месяца) раздел открывается на текущем, как раньше. Чужая форма или месяца нет в выборе —
+ * null.
+ */
+export const parseSavedHousingMonth = (
+  raw: unknown,
+  currentMonth: string,
+  options: ReadonlyArray<string>,
+): ISavedHousingMonth | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const { month, savedIn } = raw as Record<string, unknown>;
+  if (typeof month !== 'string' || savedIn !== currentMonth || !options.includes(month)) return null;
+  return { month, savedIn };
+};
+
 /** Что пришло в адресе возврата (только вкладка «Проживание», ?tab=dormitory). */
 export const readHousingReturn = (params: URLSearchParams): IHousingReturn => {
   if (params.get('tab') !== 'dormitory') return { housing: null, month: null, apartment: null };

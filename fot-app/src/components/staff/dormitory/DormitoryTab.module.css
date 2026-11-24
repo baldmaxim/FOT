@@ -189,13 +189,19 @@
 }
 
 @media (min-width: 769px) {
-  /* Одной строкой с поиском: селект и кнопки режимов не переносятся. */
-  .aside { flex-wrap: nowrap; }
   .select { flex: 0 0 280px; min-height: 36px; font-size: 14px; }
   .toggle { min-height: 36px; }
   .monthNav { flex: 0 0 auto; }
   .monthButton { width: 36px; height: 36px; }
   .paidCheck { min-width: 36px; }
+}
+
+/*
+ * Одной строкой с поиском — с 1280px: селект и три кнопки режимов («Архив», «История взысканий», «Справочник») шире
+ * 600px, на планшете и узком десктопе (с боковым меню) переносятся, без горизонтальной прокрутки.
+ */
+@media (min-width: 1280px) {
+  .aside { flex-wrap: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

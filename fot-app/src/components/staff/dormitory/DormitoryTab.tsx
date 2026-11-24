@@ -14,9 +14,11 @@ import { dormitoryAddressOptions } from '../../../utils/dormitoryStayForm';
 import {
   housingBackPath,
   housingMonthOptions,
+  parseSavedHousingMonth,
   readHousingReturn,
   stripHousingReturn,
   type HousingTab,
+  type ISavedHousingMonth,
 } from '../../../utils/housingTables';
 import { moscowTodayIso } from '../../../utils/moscowDate';
 import { MonthSelect } from '../../ui/MonthSelect';
@@ -58,15 +60,23 @@ export const DormitoryTab: FC = () => {
   const monthOptions = useMemo(() => housingMonthOptions(currentMonth), [currentMonth]);
   // Возврат из карточки: адрес — один раз, при открытии раздела.
   const [returned] = useState(() => readHousingReturn(searchParams));
-  const isMonthOption = (value: unknown): value is string => typeof value === 'string' && monthOptions.includes(value);
   const [tab, setTab] = useSessionState<HousingTab>('housing.tab', 'apartment', {
     parse: parseHousingTab,
     override: parseHousingTab(returned.housing),
   });
-  const [month, setMonth] = useSessionState<string>('housing.month', currentMonth, {
-    parse: raw => (isMonthOption(raw) ? raw : null),
-    override: isMonthOption(returned.month) ? returned.month : null,
-  });
+  // Месяц хранится с месяцем выбора: после смены календарного месяца раздел открывается на текущем.
+  const [savedMonth, setSavedMonth] = useSessionState<ISavedHousingMonth>(
+    'housing.month',
+    { month: currentMonth, savedIn: currentMonth },
+    {
+      parse: raw => parseSavedHousingMonth(raw, currentMonth, monthOptions),
+      override: returned.month && monthOptions.includes(returned.month)
+        ? { month: returned.month, savedIn: currentMonth }
+        : null,
+    },
+  );
+  const month = savedMonth.month;
+  const setMonth = (next: string) => setSavedMonth({ month: next, savedIn: currentMonth });
   const [visited, setVisited] = useState<ReadonlySet<HousingTab>>(() => new Set([tab]));
 
   // Параметры возврата прочитаны — убрать из адреса (replace): окно квартиры не откроется само при следующем заходе.

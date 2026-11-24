@@ -18,10 +18,12 @@ export const PenaltyWarning: FC<IPenaltyWarningProps> = ({ match }) => {
   return (
     <div className={styles.penaltyWarning} role="status">
       <strong>{PENALTY_WARNING_TITLES[match.level]}</strong>
-      <ul>
-        {/* Своего ключа у записи в ответе нет: порядок стабилен (сервер сортирует), список только для чтения. */}
-        {match.items.map((item, index) => <li key={index}>{penaltyItemText(item)}</li>)}
-      </ul>
+      {match.items.length > 0 && (
+        <ul>
+          {/* Своего ключа у записи в ответе нет: порядок стабилен (сервер сортирует), список только для чтения. */}
+          {match.items.map((item, index) => <li key={index}>{penaltyItemText(item)}</li>)}
+        </ul>
+      )}
     </div>
   );
 };

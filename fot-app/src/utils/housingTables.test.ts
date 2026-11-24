@@ -19,6 +19,7 @@ import {
   housingBackPath,
   housingMonthOptions,
   livesOn,
+  parseSavedHousingMonth,
   readHousingReturn,
   stripHousingReturn,
   touchesMonth,
@@ -150,6 +151,16 @@ describe('«Проживание»: архив за месяц, «Возобно
     expect(APARTMENT_ARCHIVE_COLUMNS.map(column => column.label)).toEqual(
       ['Сотрудник', 'Подразделение', 'Квартира', 'Дата въезда', 'Дата выезда', 'Комментарий'],
     );
+  });
+
+  it('сохранённый месяц — только в том календарном месяце, когда выбран; потом — текущий', () => {
+    const options = housingMonthOptions('2026-11');
+    expect(parseSavedHousingMonth({ month: '2026-10', savedIn: '2026-11' }, '2026-11', options))
+      .toEqual({ month: '2026-10', savedIn: '2026-11' });
+    // Вкладку открыли уже в декабре — выбор ноября не действует.
+    expect(parseSavedHousingMonth({ month: '2026-10', savedIn: '2026-11' }, '2026-12', housingMonthOptions('2026-12'))).toBeNull();
+    expect(parseSavedHousingMonth({ month: '2025-01', savedIn: '2026-11' }, '2026-11', options)).toBeNull();
+    expect(parseSavedHousingMonth('2026-10', '2026-11', options)).toBeNull();
   });
 
   it('адрес возврата: вкладка, месяц, окно квартиры — читается один раз и убирается, чужие параметры целы', () => {

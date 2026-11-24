@@ -172,7 +172,10 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             invalid={error?.field === 'employee'}
           />
         )}
-        {checkPenalties && penaltyQuery.data?.level && <PenaltyWarning match={penaltyQuery.data} />}
+        {/* Подробности — по запросу; пока он идёт или не удался — заголовок по пометке из поиска (та же проверка). */}
+        {checkPenalties && (penaltyQuery.data
+          ? penaltyQuery.data.level && <PenaltyWarning match={penaltyQuery.data} />
+          : employee?.penalty && <PenaltyWarning match={{ level: employee.penalty, items: [] }} />)}
       </div>
 
       {!isEdit && !payroll && !fixedKind && !apartment && (
