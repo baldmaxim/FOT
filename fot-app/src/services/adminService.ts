@@ -21,6 +21,8 @@ interface UserFromApi {
   chat_inbound_mode: ChatInboundMode;
   is_approved: boolean;
   two_factor_enabled: boolean;
+  /** Сотрудник уволен — вход на портал закрыт. */
+  is_dismissed?: boolean;
   approved_at: string | null;
   created_at: string;
 }

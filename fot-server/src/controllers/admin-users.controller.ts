@@ -59,6 +59,7 @@ import {
 } from '../services/assignable-roles.service.js';
 import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
 import { AccountEmailError, changeAccountEmail } from '../services/account-email.service.js';
+import { isDismissedEmploymentStatus } from '../services/account-status.service.js';
 import { getContractorRootId } from '../config/contractor.js';
 
 /**
@@ -604,10 +605,13 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   listParams.push(offset);
   const offsetIdx = listParams.length;
 
-  let rows: Array<UserProfile & { total_count: number }>;
+  // employment_status — подзапросом, без JOIN: WHERE/поиск/roleCounts остаются на одной user_profiles.
+  type PaginatedUserRow = UserProfile & { total_count: number; employment_status: string | null };
+  let rows: PaginatedUserRow[];
   try {
-    rows = await query<UserProfile & { total_count: number }>(
-      `SELECT up.*, count(*) OVER ()::int AS total_count
+    rows = await query<PaginatedUserRow>(
+      `SELECT up.*, count(*) OVER ()::int AS total_count,
+              (SELECT e.employment_status FROM employees e WHERE e.id = up.employee_id) AS employment_status
          FROM user_profiles up
          ${listWhereSql}
         ORDER BY up.created_at DESC
@@ -623,7 +627,7 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
   const totalPages = Math.ceil(total / pageSize);
 
-  const usersSlice = rows as UserProfile[];
+  const usersSlice = rows;
   const userIds = usersSlice.map(u => u.id);
   const userEmployeePairs = usersSlice.map(u => ({ user_id: u.id, employee_id: u.employee_id }));
 
@@ -646,7 +650,7 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
     };
   }
 
-  const data = usersSlice.map((u: UserProfile) => {
+  const data = usersSlice.map((u: PaginatedUserRow) => {
     const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
     const authInfo = authEmailMap[u.id];
     return {
@@ -664,6 +668,8 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
       chat_inbound_mode: (u.chat_inbound_mode || 'open') as ChatInboundMode,
       is_approved: u.is_approved,
       two_factor_enabled: u.two_factor_enabled,
+      // Вход закрыт по тому же правилу, что в login/authenticate (account-status.service).
+      is_dismissed: isDismissedEmploymentStatus(u.employment_status),
       approved_at: u.approved_at,
       created_at: u.created_at,
     };

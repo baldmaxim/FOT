@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   hasOrgWideAccountAccess: vi.fn(),
   resolveAccessibleDepartmentIds: vi.fn(),
   updateUserById: vi.fn(),
+  getUsersByIds: vi.fn(),
 }));
 
 vi.mock('../services/blacklist.service.js', () => ({
@@ -41,7 +42,7 @@ vi.mock('../services/roles-cache.service.js', () => ({
   getAllRoles: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../services/local-auth.service.js', () => ({
-  localAuthService: { getUserById: h.getUserById, updateUserById: h.updateUserById },
+  localAuthService: { getUserById: h.getUserById, updateUserById: h.updateUserById, getUsersByIds: h.getUsersByIds },
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest, log: vi.fn() },
@@ -63,7 +64,8 @@ vi.mock('../services/assignable-roles.service.js', () => ({
 }));
 vi.mock('../services/department-access.service.js', () => ({
   loadEmployeeManagerAssignmentMap: vi.fn(async () => new Map()),
-  loadExplicitManagerAssignmentMap: vi.fn(),
+  loadExplicitManagerAssignmentMap: vi.fn(async () => new Map()),
+  loadDeputyAssignmentMap: vi.fn(async () => new Map()),
   loadAssignedEmployeeMap: vi.fn(),
   replaceUserEmployeeAccess: vi.fn(),
 }));
@@ -117,6 +119,7 @@ beforeEach(() => {
   h.resolveAccessibleDepartmentIds.mockResolvedValue('all');
   h.hasOrgWideAccountAccess.mockResolvedValue(false);
   h.query.mockResolvedValue([]);
+  h.getUsersByIds.mockResolvedValue(new Map());
 });
 
 const sqlOf = (call: unknown[] | undefined) => String(call?.[0] ?? '');
@@ -149,6 +152,29 @@ describe('«Все пользователи» — поиск', () => {
     await adminUsersController.getAllUsers(makeReq({ page: '1', search: 'гри' }), makeRes() as never);
     expect(h.queryOne).not.toHaveBeenCalled();
     expect(sqlOf(h.query.mock.calls[0])).toContain('(up.full_name ~* $');
+  });
+});
+
+describe('«Все пользователи» — уволенный', () => {
+  it('is_dismissed — по employment_status карточки, как у входа', async () => {
+    const row = (id: string, employeeId: number | null, employmentStatus: string | null) => ({
+      id, full_name: id, employee_id: employeeId, employment_status: employmentStatus,
+      system_role_id: null, is_approved: true, two_factor_enabled: false, total_count: 3,
+    });
+    h.query.mockImplementation(async (sql: string) => (sql.includes('total_count')
+      ? [row('fired', 8719, 'fired'), row('active', 1, 'active'), row('unlinked', null, null)]
+      : []));
+    const res = makeRes();
+    await adminUsersController.getAllUsers(makeReq({ page: '1' }), res as never);
+    expect(res.statusCode).toBe(200);
+    const listSql = h.query.mock.calls.map(call => sqlOf(call)).find(sql => sql.includes('total_count'));
+    expect(listSql).toContain('SELECT e.employment_status FROM employees e WHERE e.id = up.employee_id');
+    const data = (res.body as { data: Array<{ id: string; is_dismissed: boolean }> }).data;
+    expect(data.map(u => [u.id, u.is_dismissed])).toEqual([
+      ['fired', true],
+      ['active', false],
+      ['unlinked', false],
+    ]);
   });
 });
 
