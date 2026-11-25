@@ -149,7 +149,7 @@ const main = async (): Promise<void> => {
     const names = [...new Set([...persons.values()].map(person => normalizePayoutName(person.fullName)))];
     const earlierRows = await query<{ name_key: string; employee_id: number }>(
       `SELECT DISTINCT ${SQL_NAME('l.full_name_1c')} AS name_key, l.employee_id FROM payroll_1c_payout_lines l
-        WHERE l.employee_id IS NOT NULL AND l.resolution IN ('auto_id_all', 'confirmed')
+        WHERE l.employee_id IS NOT NULL AND l.resolution IN ('auto_id_fot', 'auto_id_all', 'confirmed')
           AND ${SQL_NAME('l.full_name_1c')} = ANY($1::text[])`,
       [names],
     );

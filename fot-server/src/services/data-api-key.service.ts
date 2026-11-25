@@ -20,6 +20,7 @@ export interface DataApiKeyRow {
   allow_timesheet_ack: boolean;
   /** Приём увольнений из 1С (POST /payroll/dismissals) — пишет «Оплачено». */
   allow_payroll_dismissal_import: boolean;
+  allow_payroll_payouts_import: boolean;
   created_by: string | null;
   created_at: string;
   expires_at: string | null;
@@ -33,6 +34,7 @@ export interface CreateKeyInput {
   rate_limit_per_minute?: number;
   allow_timesheet_ack?: boolean;
   allow_payroll_dismissal_import?: boolean;
+  allow_payroll_payouts_import?: boolean;
   expires_at?: string | null;
   created_by: string;
 }
@@ -72,7 +74,8 @@ export function hashSecret(secret: string): string {
  * не ошибка SELECT — иначе проверка любого ключа data-API падала бы в 401 и вставал бы обмен табелями.
  */
 const DISMISSAL_IMPORT_COL =
-  "COALESCE((to_jsonb(data_api_keys) ->> 'allow_payroll_dismissal_import')::boolean, false) AS allow_payroll_dismissal_import";
+  "COALESCE((to_jsonb(data_api_keys) ->> 'allow_payroll_dismissal_import')::boolean, false) AS allow_payroll_dismissal_import, "
+  + "COALESCE((to_jsonb(data_api_keys) ->> 'allow_payroll_payouts_import')::boolean, false) AS allow_payroll_payouts_import";
 
 const KEY_PUBLIC_COLS =
   'id, name, description, key_prefix, rate_limit_per_minute, allow_timesheet_ack, ' + DISMISSAL_IMPORT_COL + ', created_by, created_at, expires_at, revoked_at, last_used_at';
@@ -85,8 +88,8 @@ export const dataApiKeyService = {
       row = await queryOne<{ id: string }>(
         `INSERT INTO data_api_keys
            (name, description, key_prefix, key_hash, rate_limit_per_minute, allow_timesheet_ack, expires_at, created_by,
-            allow_payroll_dismissal_import)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            allow_payroll_dismissal_import, allow_payroll_payouts_import)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id`,
         [
           input.name,
@@ -98,6 +101,7 @@ export const dataApiKeyService = {
           input.expires_at ?? null,
           input.created_by,
           input.allow_payroll_dismissal_import ?? false,
+          input.allow_payroll_payouts_import ?? false,
         ],
       );
     } catch (err) {
@@ -146,7 +150,10 @@ export const dataApiKeyService = {
    * Возвращает дискриминированный результат, чтобы middleware отдал 401 с причиной.
    */
   async authenticateRawToken(rawToken: string): Promise<
-    | { ok: true; key: { id: string; name: string; rate_limit_per_minute: number; allow_timesheet_ack: boolean; allow_payroll_dismissal_import: boolean } }
+    | { ok: true; key: {
+      id: string; name: string; rate_limit_per_minute: number; allow_timesheet_ack: boolean; allow_payroll_dismissal_import: boolean;
+      allow_payroll_payouts_import: boolean;
+    } }
     | { ok: false; detail: string }
   > {
     const parsed = parseToken(rawToken);
@@ -155,6 +162,7 @@ export const dataApiKeyService = {
     let row: {
       id: string; name: string; key_hash: string;
       rate_limit_per_minute: number; allow_timesheet_ack: boolean; allow_payroll_dismissal_import?: boolean;
+      allow_payroll_payouts_import?: boolean;
       expires_at: string | null; revoked_at: string | null;
     } | null;
     try {
@@ -192,6 +200,7 @@ export const dataApiKeyService = {
         rate_limit_per_minute: row.rate_limit_per_minute,
         allow_timesheet_ack: row.allow_timesheet_ack === true,
         allow_payroll_dismissal_import: row.allow_payroll_dismissal_import === true,
+        allow_payroll_payouts_import: row.allow_payroll_payouts_import === true,
       },
     };
   },
@@ -199,7 +208,7 @@ export const dataApiKeyService = {
   async updateKey(
     id: string,
     patch: Partial<Pick<DataApiKeyRow,
-      'name' | 'description' | 'rate_limit_per_minute' | 'allow_timesheet_ack' | 'allow_payroll_dismissal_import' | 'expires_at'>>,
+      'name' | 'description' | 'rate_limit_per_minute' | 'allow_timesheet_ack' | 'allow_payroll_dismissal_import' | 'allow_payroll_payouts_import' | 'expires_at'>>,
   ): Promise<void> {
     const setClauses: string[] = [];
     const params: unknown[] = [];
@@ -216,6 +225,8 @@ export const dataApiKeyService = {
       setClauses.push(`allow_timesheet_ack = ${addParam(patch.allow_timesheet_ack)}`);
     if (patch.allow_payroll_dismissal_import !== undefined)
       setClauses.push(`allow_payroll_dismissal_import = ${addParam(patch.allow_payroll_dismissal_import)}`);
+    if (patch.allow_payroll_payouts_import !== undefined)
+      setClauses.push(`allow_payroll_payouts_import = ${addParam(patch.allow_payroll_payouts_import)}`);
     if (patch.expires_at !== undefined) setClauses.push(`expires_at = ${addParam(patch.expires_at)}`);
 
     if (setClauses.length === 0) return;

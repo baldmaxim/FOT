@@ -86,6 +86,8 @@ interface ICompensationTermsPageProps {
   calcReady?: boolean;
   /** Клик по сумме «Удержания (1С)»: строка, раздел, кнопка (вернуть фокус) и месяцы сумм строки. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
+  /** Клик по «Выплатам на карту (1С)»: строка, кнопка (вернуть фокус) и месяцы сумм строки. */
+  onOpenCardPayouts?: (row: IPayrollTermsRow, trigger: HTMLButtonElement, months: PayrollPaidMonths) => void;
   /**
    * Группа отделов (ИТР / Рабочие в списке «Все отделы») — на обоих списках; объект месяца, как в «Своде», — только
    * «Расчёты» (поле и отбор — при месяцах). Не передан — групп в списке нет.
@@ -110,6 +112,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
   paidMonths,
   calcReady = true,
   onOpenPaidItems,
+  onOpenCardPayouts,
   monthFilter,
   onMonthFilterChange,
 }) => {
@@ -173,6 +176,9 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
     // Кнопки сумм есть только у строк с суммами — месяцы к этому времени известны.
     if (shownPaidMonths !== null) onOpenPaidItems?.(row, kind, trigger, shownPaidMonths);
   }, [onOpenPaidItems, shownPaidMonths]);
+  const handleOpenCardPayouts = useCallback((row: IPayrollTermsRow, trigger: HTMLButtonElement) => {
+    if (shownPaidMonths !== null) onOpenCardPayouts?.(row, trigger, shownPaidMonths);
+  }, [onOpenCardPayouts, shownPaidMonths]);
 
   const structureTree = usePayrollStructureTree();
   const sectionDepartments = useStaffSectionDepartments();
@@ -436,6 +442,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             accrualMonths={accrualMonths}
             paidPeriod={paidPeriod}
             onOpenPaidItems={onOpenPaidItems ? handleOpenPaidItems : undefined}
+            onOpenCardPayouts={onOpenCardPayouts ? handleOpenCardPayouts : undefined}
             expandedColumns={isCalcScreen ? expandedColumns : undefined}
             onToggleExpand={isCalcScreen ? toggleExpanded : undefined}
             totalsStatus={totalsStatus}

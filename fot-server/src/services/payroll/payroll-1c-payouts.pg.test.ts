@@ -141,8 +141,10 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     await run(`
       DROP TABLE IF EXISTS payroll_1c_payout_imports, payroll_1c_payout_lines, payroll_1c_payout_documents,
         payroll_paid_amounts, employee_hr_profiles, employee_dismissal_events, timesheet_version_objects,
-        timesheet_versions, employees, org_departments, user_profiles CASCADE;
+        timesheet_versions, employees, org_departments, user_profiles, payroll_1c_payout_api_states,
+        payroll_1c_payout_api_batches, data_api_keys CASCADE;
       CREATE TABLE user_profiles (id uuid PRIMARY KEY);
+      CREATE TABLE data_api_keys (id uuid PRIMARY KEY);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, parent_id uuid, name text NOT NULL);
       CREATE TABLE employees (id integer PRIMARY KEY, full_name text NOT NULL, employment_status text NOT NULL DEFAULT 'active',
         hire_date date, dismissal_date date, org_department_id uuid, is_archived boolean);
@@ -181,6 +183,9 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     await run(migration('328_payroll_1c_payouts.sql'));
     await run(migration('367_payroll_payouts_brigade_sheet.sql'));
     await run(migration('367_payroll_payouts_brigade_sheet.sql'));
+    // 379 (API, владение): загрузка файлом пишет origin = 'file', триггер её не трогает.
+    await run(migration('366_payroll_1c_payouts_sm_inn.sql'));
+    await run(migration('379_payroll_1c_payouts_api.sql'));
   });
 
   afterAll(async () => {
@@ -375,6 +380,16 @@ describe.skipIf(!PG_URL)('«Перечислено (1С)» на PostgreSQL', () 
     expect(await loadPayouts(['2026-08'])).toEqual([{ employee_id: 1, month: '2026-08', amount: '43500.00' }]);
     expect(await visible('2026-08-01')).toBe(true);
     expect(await visible('2026-07-01')).toBe(false);
+
+    // Окно ведомостей сотрудника (клик по ячейке) = ячейка «Выплаты на карту (1С)» за те же месяцы, с перенесённой строкой.
+    const cents = (rows: Array<{ amount: string }> | null) => (rows ?? []).reduce((acc, row) => acc + Math.round(Number(row.amount) * 100), 0);
+    const cellCents = cents((await run(
+      `SELECT card.card_payouts_raw AS raw FROM (SELECT 1 AS employee_id) page ${cardPayoutsJoinSql('$1')}`,
+      [['2026-08-01', '2026-09-01']],
+    )).rows[0].raw);
+    const windowRows = await listEmployeePayouts1c(1, '2026-08', '2026-09');
+    expect(cents(windowRows)).toBe(cellCents);
+    expect(cellCents).toBe(sum(septAfter) + 4_350_000);
 
     // Список месяцев «Расчётов» — только штат (работающий 2): его строка, перенесённая в июль.
     await run(`UPDATE payroll_1c_payout_lines SET employee_id = 2 WHERE document_id = $1`, [doc.id]);

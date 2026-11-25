@@ -175,10 +175,14 @@ router.post('/summary/export', termsView, payrollSummaryController.exportTree);
 // ─── Кому доступен раздел (окно «Справочник», только чтение; список ведётся в БД) ─
 router.get('/section-access', deductionsView, payrollSectionAccessController.list);
 
-// ─── Ведомости выплаты из 1С (миграция 328): справочно, в расчётах не участвуют ──
+// ─── Ведомости выплаты из 1С (миграции 328, 379): «Выплаты на карту (1С)» и «Остаток» «Расчётов» ──
 // Право — до приёма файла: без него файл не читается в память.
 router.get('/1c-payouts/capability', paymentsView, payroll1cPayoutsController.capability);
 router.get('/1c-payouts/months', paymentsView, payroll1cPayoutsController.months);
+// Журнал ведомостей 1С — ещё и весь штат (canViewPayouts1cJournal в контроллере).
+router.get('/1c-payouts/documents', paymentsView, payroll1cPayoutsController.journal);
+router.get('/1c-payouts/documents/:id', paymentsView, payroll1cPayoutsController.journalDoc);
+router.post('/1c-payouts/documents/export', paymentsView, payroll1cPayoutsController.exportJournal);
 router.post('/1c-payouts/preview', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.preview);
 router.post('/1c-payouts/import', paymentsEdit, requirePayouts1cImport, acceptPayout1cFile, payroll1cPayoutsController.importFile);
 

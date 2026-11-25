@@ -1,6 +1,7 @@
 /**
- * «Перечислено (1С)» (миграция 328): предпросмотр и загрузка ведомостей выплаты из 1С, история сотрудника.
- * Справочно — в расчётах ФОТ не участвует: эти таблицы читают только загрузка и «История выплат».
+ * «Перечислено (1С)» (миграция 328): предпросмотр и загрузка ведомостей выплаты из 1С кнопкой, история сотрудника.
+ * Ведомости участвуют в «Выплатах на карту (1С)» и «Остатке» «Расчётов», «Своде», листке. Ведомость, пришедшую из 1С
+ * по API (origin = 'api', миграция 379), кнопка не меняет — 409; её ведёт только API (payroll-1c-payouts.api.service.ts).
  *
  * Сервер между шагами ничего не хранит: файл присылается заново, выбор оператора привязан к fingerprint строки
  * (хеш содержимого файла + ключ строки). Загрузка — одна транзакция с блокировкой по ГУИДу (advisory lock — и когда
@@ -22,7 +23,7 @@ import {
 } from './payroll-1c-payouts.parser.js';
 import { payrollContractorDeptsCte, payrollStaffWhereSql } from './payroll-registry-scope.service.js';
 
-export type PayoutResolution = 'auto_id_all' | 'confirmed' | 'unmatched';
+export type PayoutResolution = 'auto_id_fot' | 'auto_id_all' | 'confirmed' | 'unmatched';
 export type PayoutPreviewStatus = 'new' | 'unchanged' | 'enrich' | 'changed';
 export type PayoutImportAction = 'new' | 'replace' | 'enrich' | 'relink' | 'unchanged';
 
@@ -99,6 +100,8 @@ interface IStoredDocument extends IPayoutHeader {
   organization_inn: string;
   content_hash: string;
   revision: number;
+  /** Откуда ведомость (миграция 379); до миграции — file. */
+  origin: string;
 }
 
 interface IStoredLine {
@@ -143,7 +146,14 @@ const parseFile = (buffer: Buffer): IPayout1cDocument => parsePayout1cXml(buffer
 
 const DOC_COLUMNS = `id, doc_guid::text AS doc_guid, doc_number, zup2_number, doc_date::text AS doc_date,
   period_month::text AS period_month, payment_method, salary_project, organization_inn, total_amount::text AS total_amount,
-  content_hash, revision`;
+  content_hash, revision, COALESCE(to_jsonb(payroll_1c_payout_documents) ->> 'origin', 'file') AS origin`;
+
+/** Ведомость из API ведёт только API: кнопка её не меняет. */
+const assertNotApiOwned = (stored: { doc: IStoredDocument } | null): void => {
+  if (stored?.doc.origin === 'api') {
+    throw new Payout1cImportError('Эта ведомость пришла из 1С по API — её изменения приходят из 1С, файлом она не меняется', 409);
+  }
+};
 const LINE_COLUMNS = `line_no, line_key, full_name_1c, person_id_all::text AS person_id_all, brigade_1c,
   amount::text AS amount, employee_id, resolution, resolution_reason`;
 
@@ -258,6 +268,7 @@ export const previewPayouts1c = async (buffer: Buffer): Promise<IPayoutPreview> 
   const doc = parseFile(buffer);
   await assertNotLoadedUnderOtherGuid(viaPool, doc);
   const [stored, matches] = await Promise.all([loadStored(viaPool, doc.guid, false), matchPayoutLines(doc)]);
+  assertNotApiOwned(stored);
   const sameContent = stored !== null && stored.doc.content_hash === doc.contentHash
     && idAllConflicts(doc, stored.lines).length === 0;
   const storedByKey = new Map((sameContent ? stored.lines : []).map(line => [line.line_key, line]));
@@ -380,6 +391,7 @@ export const importPayouts1c = async (input: IPayoutImportInput): Promise<IPayou
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [payoutNumberLockKey(doc.docNumber, doc.docDate)]);
     await assertNotLoadedUnderOtherGuid(run, doc);
     const stored = await loadStored(run, doc.guid, true);
+    assertNotApiOwned(stored);
     const revision = stored?.doc.revision ?? 0;
     if (revision !== input.expectedRevision) {
       throw new Payout1cImportError('Документ уже изменили — проверьте файл заново', 409);
@@ -499,21 +511,35 @@ export interface IEmployeePayout1c {
   zup2_number: string | null;
   doc_date: string;
   payment_method: string;
+  /** Сумма сотрудника в ведомости за месяц (строки одной ведомости сложены). */
   amount: string;
+  organization_inn: string;
+  /** Откуда ведомость (миграция 379): api | file | register | generator | brigade_sheet. */
+  origin: string;
+  comment: string | null;
+  /** «Основание» строк сотрудника, разные — через «; ». */
+  basis: string | null;
 }
 
-/** «Перечислено (1С)» сотрудника за месяцы начисления from..to (YYYY-MM). */
+/**
+ * «Перечислено (1С)» сотрудника за месяцы начисления from..to (YYYY-MM): одна ведомость за месяц — одна строка (строки
+ * сотрудника в ней сложены). Сумма за месяц — как «Выплаты на карту (1С)» «Расчётов» (cardPayoutsJoinSql).
+ */
 export const listEmployeePayouts1c = async (employeeId: number, from: string, to: string): Promise<IEmployeePayout1c[]> => {
-  const rows = await query<IEmployeePayout1c & { line_no: number }>(
+  const rows = await query<IEmployeePayout1c>(
     `SELECT to_char(${PAYOUT_LINE_MONTH_SQL}, 'YYYY-MM') AS month, d.id AS document_id, d.doc_number, d.zup2_number,
-            d.doc_date::text AS doc_date, d.payment_method, l.amount::text AS amount, l.line_no
+            d.doc_date::text AS doc_date, d.payment_method, sum(l.amount)::text AS amount, d.organization_inn,
+            -- Через to_jsonb: листок сотрудника работает и до миграции 379 (origin, comment, basis).
+            COALESCE(min(to_jsonb(d) ->> 'origin'), 'file') AS origin, min(to_jsonb(d) ->> 'comment') AS comment,
+            string_agg(DISTINCT to_jsonb(l) ->> 'basis', '; ') AS basis
        FROM payroll_1c_payout_lines l
        JOIN payroll_1c_payout_documents d ON d.id = l.document_id
       WHERE l.employee_id = $1 AND ${PAYOUT_LINE_MONTH_SQL} BETWEEN ($2 || '-01')::date AND ($3 || '-01')::date
-      ORDER BY ${PAYOUT_LINE_MONTH_SQL}, d.doc_date, d.doc_number, l.line_no`,
+      GROUP BY ${PAYOUT_LINE_MONTH_SQL}, d.id
+      ORDER BY ${PAYOUT_LINE_MONTH_SQL}, d.doc_date, d.doc_number, d.id`,
     [employeeId, from, to],
   );
-  return rows.map(({ line_no: _lineNo, ...row }) => ({ ...row, document_id: Number(row.document_id) }));
+  return rows.map(row => ({ ...row, document_id: Number(row.document_id) }));
 };
 
 /**

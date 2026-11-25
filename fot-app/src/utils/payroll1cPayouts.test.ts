@@ -14,6 +14,7 @@ import {
 
 const payout = (month: string, amount: string, id: number): IEmployeePayout1c => ({
   month, document_id: id, doc_number: `0000-00${id}`, zup2_number: null, doc_date: '2026-10-09', payment_method: 'Зарплата', amount,
+  organization_inn: '7736255508', origin: 'file', comment: null, basis: null,
 });
 
 const candidate = (id: number) => ({

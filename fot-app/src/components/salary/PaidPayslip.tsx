@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { payslipQueryOptions } from '../../hooks/usePayrollPaid';
 import type { IEmployeePayout1c } from '../../services/payroll1cPayoutsService';
+import { PAYOUT_ORIGIN_LABELS, payoutOrganizationLabel } from '../../utils/payroll1cJournal';
 import { isCalcCounted, payslipRemainder } from '../../utils/payrollCalc';
 import { formatPaidAmount, paidPayout, type PayrollPaidTotals } from '../../utils/payrollPaid';
 import { payslipRateLines } from '../../utils/payrollPayslip';
@@ -36,7 +37,8 @@ const formatDocDate = (date: string): string => date.split('-').reverse().join('
  *    («Начислено за N дней», «Удержано») нет (решение 30.10.2026). Старый бэкенд без расчёта — блок «По ставкам ФОТ»;
  *  - месяц с окладом по часам — «Часы по дням» (PayslipHoursDays, свёрнуто): норма, табель, оклад, переработка по датам;
  *  - долги прошлых месяцев из ведомости бригады (PayslipDebtSection) — расшифровка строки «Погашение долгов»;
- *  - «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце);
+ *  - «Перечислено (1С)» — ведомости выплаты за месяц начисления (дата ведомости бывает уже в следующем месяце): вид,
+ *    организация, откуда пришла, комментарий ведомости и основание строк;
  *  - «Остаток» — итог ФОТ минус перечисленное: НДФЛ в итоге ФОТ не вычтен, поэтому он сидит в остатке.
  */
 export const PaidPayslip: FC<IPaidPayslipProps> = ({
@@ -129,7 +131,11 @@ export const PaidPayslip: FC<IPaidPayslipProps> = ({
                     <td className={styles.nowrap}>{formatDocDate(doc.doc_date)}</td>
                     <th scope="row" className={styles.kind}>
                       <span className={styles.kindName}>№ {doc.doc_number}</span>
-                      <span className={styles.kindNote}>{doc.payment_method}</span>
+                      <span className={styles.kindNote}>
+                        {doc.payment_method} · {payoutOrganizationLabel(doc.organization_inn)} · {PAYOUT_ORIGIN_LABELS[doc.origin] ?? doc.origin}
+                      </span>
+                      {doc.comment && <span className={styles.kindNote}>{doc.comment}</span>}
+                      {doc.basis && <span className={styles.kindNote}>Основание: {doc.basis}</span>}
                     </th>
                     <td className={styles.num}>{formatPaidAmount(Number(doc.amount))}</td>
                   </tr>

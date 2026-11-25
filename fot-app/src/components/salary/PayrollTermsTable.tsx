@@ -67,6 +67,8 @@ interface IPayrollTermsTableProps {
   paidPeriod?: string;
   /** Клик по сумме «Удержания (1С)»: окно со статьями; trigger — куда вернуть фокус. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
+  /** Клик по «Выплатам на карту (1С)»: окно ведомостей сотрудника; trigger — куда вернуть фокус. */
+  onOpenCardPayouts?: (row: IPayrollTermsRow, trigger: HTMLButtonElement) => void;
   /** «Расчёты»: раскрытые «+» столбцы («Доплаты», «Удержания», «Удержания (ФОТ)»); без onToggleExpand «+» нет. */
   expandedColumns?: ReadonlySet<PayrollExpandableColumn>;
   onToggleExpand?: (column: PayrollExpandableColumn) => void;
@@ -114,6 +116,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   accrualMonths,
   paidPeriod,
   onOpenPaidItems,
+  onOpenCardPayouts,
   expandedColumns = NO_EXPANDED,
   onToggleExpand,
   totalsStatus,
@@ -365,7 +368,15 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
       }
       default:
         // Состав зарплаты «Расчётов»: ФОТ по закрытому табелю и суммы 1С.
-        return <PayrollCalcCell key={column} column={column} row={row} className={groupClasses.get(column)?.cell} />;
+        return (
+          <PayrollCalcCell
+            key={column}
+            column={column}
+            row={row}
+            className={groupClasses.get(column)?.cell}
+            onOpenCardPayouts={column === 'card_payouts' ? onOpenCardPayouts : undefined}
+          />
+        );
     }
   };
 

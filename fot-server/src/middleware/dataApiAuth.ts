@@ -9,6 +9,8 @@ export interface DataApiKeyContext {
   allow_timesheet_ack: boolean;
   /** Разрешено ли ключу присылать увольнения из 1С (POST /payroll/dismissals). */
   allow_payroll_dismissal_import: boolean;
+  /** Разрешено ли ключу присылать ведомости выплаты из 1С (POST /payroll/payouts, /payroll/payouts/cancel). */
+  allow_payroll_payouts_import: boolean;
 }
 
 /**

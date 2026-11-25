@@ -1,8 +1,9 @@
-import { lazy, Suspense, useMemo, useRef, useState, type FC } from 'react';
+import { lazy, Suspense, useCallback, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { PAYOUTS_1C_KEYS, payroll1cPayoutsService } from '../../services/payroll1cPayoutsService';
-import type { IPayrollTermsRow, PayrollPaidMonths } from '../../services/payrollService';
+import { payrollService, type IPayrollTermsRow, type PayrollPaidMonths } from '../../services/payrollService';
+import { useToast } from '../../contexts/ToastContext';
 import { PAYROLL_SUMMARY_KEYS, payrollSummaryService } from '../../services/payrollSummaryService';
 import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { payrollMonthOptions } from '../../utils/payrollAccruals';
@@ -25,6 +26,10 @@ const PayrollSummaryModal = lazy(() => import('../../components/salary/summary/P
   .then(m => ({ default: m.PayrollSummaryModal })));
 const Payroll1cImportModal = lazy(() => import('../../components/salary/Payroll1cImportModal')
   .then(m => ({ default: m.Payroll1cImportModal })));
+const Payroll1cJournalModal = lazy(() => import('../../components/salary/Payroll1cJournalModal')
+  .then(m => ({ default: m.Payroll1cJournalModal })));
+const Payroll1cPayoutsModal = lazy(() => import('../../components/salary/Payroll1cPayoutsModal')
+  .then(m => ({ default: m.Payroll1cPayoutsModal })));
 
 interface IPayrollDeductionsPageProps {
   /** Дата выборки условий — та же, что у «Условий оплаты». */
@@ -61,13 +66,21 @@ interface IPaidItemsWindow {
   months: PayrollPaidMonths;
 }
 
+/** Окно ведомостей 1С сотрудника (клик по «Выплатам на карту (1С)»): строка, кнопка (вернуть фокус) и месяцы. */
+interface ICardPayoutsWindow {
+  row: IPayrollTermsRow;
+  trigger: HTMLButtonElement;
+  months: PayrollPaidMonths;
+}
+
 /**
  * «Зарплата → Расчёты»: работавшие в выбранных месяцах и уволенные, кому за них есть суммы или дни табеля; вместо условий —
  * суммы за месяцы, выбранные рядом со «Сводом»: «Остаток к выплате» («Сумма» ФОТ минус «Выплаты на карту»), состав
  * зарплаты и удержания 1С, снизу — «Итого» по всей выборке. Клик по сумме «Удержания (1С)» — окно со статьями.
  * Рядом с шестерёнкой — «Свод» с выбором месяцев («Оплачено» по объектам) и «Справочник»: виды удержаний,
  * ставки и таблицы. «Загрузить из 1С» — ведомость выплаты (миграция 328), только тем, кому сервер разрешает
- * загрузку (вся «Зарплата»). Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
+ * загрузку (вся «Зарплата»); «Ведомости 1С» — журнал всех ведомостей (тоже весь штат). Клик по «Выплатам на карту
+ * (1С)» — ведомости сотрудника за месяцы таблицы. Клик по строке — окно с карточкой сотрудника: там вносятся компенсации, доплаты и удержания.
  * ФИО в окне — табель сотрудника; на возврате из табеля окно открывается снова, месяцы таблицы — прежние.
  */
 export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
@@ -87,6 +100,9 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
   const summaryButtonRef = useRef<HTMLButtonElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const importButtonRef = useRef<HTMLButtonElement>(null);
+  const [journalOpen, setJournalOpen] = useState(false);
+  const journalButtonRef = useRef<HTMLButtonElement>(null);
+  const [cardPayouts, setCardPayouts] = useState<ICardPayoutsWindow | null>(null);
   // Кнопка — по той же проверке, что у загрузки на сервере: нет права — нет кнопки.
   const importCapability = useQuery({
     queryKey: PAYOUTS_1C_KEYS.capability,
@@ -126,6 +142,11 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
     () => effectivePaidMonths(chosenMonths, selectable, defaultMonth),
     [chosenMonths, selectable, defaultMonth],
   );
+  // Журнал ведомостей: месяцы окна и все месяцы, за которые есть ведомости.
+  const journalMonthOptions = useMemo(
+    () => [...new Set([...payrollMonthOptions(currentMonth), ...(payoutMonthsQuery.data ?? [])])].sort(),
+    [currentMonth, payoutMonthsQuery.data],
+  );
 
   // Уход с «Расчётов» (другая вкладка, «Назад» браузера) закрывает окна: они поверх страницы, скрытие
   // экрана их не прячет. Паттерн «состояние из прошлого рендера» вместо setState-в-effect.
@@ -136,8 +157,10 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
       setDictionaryOpen(false);
       setSummaryOpen(false);
       setImportOpen(false);
+      setJournalOpen(false);
       setEmployee(null);
       setPaidItems(null);
+      setCardPayouts(null);
     }
   }
 
@@ -154,10 +177,37 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
     setImportOpen(false);
     importButtonRef.current?.focus();
   };
+  const closeJournal = () => {
+    setJournalOpen(false);
+    journalButtonRef.current?.focus();
+  };
+  const { error: showError } = useToast();
+  // Сотрудник из ведомости журнала: его строка «Расчётов» за месяц строки (уволенный тоже — у него есть выплата), журнал
+  // закрывается, открывается карточка.
+  const openEmployeeFromJournal = useCallback(async (employeeId: number, month: string) => {
+    try {
+      const { rows } = await payrollService.listTerms({
+        date, employeeId, sort: 'name', dir: 'asc', pageSize: 1, paidMonths: [month], deferCalc: true,
+      });
+      const found = rows.find(item => item.employee_id === employeeId);
+      if (!found) {
+        showError('Сотрудника нет в «Расчётах» за этот месяц или он не в вашем доступе');
+        return;
+      }
+      setJournalOpen(false);
+      setEmployee(found);
+    } catch {
+      showError('Не удалось открыть карточку сотрудника');
+    }
+  }, [date, showError]);
   // Строку с кнопкой могла убрать виртуализация или новая выборка — тогда фокус некуда вернуть.
   const closePaidItems = () => {
     if (paidItems?.trigger.isConnected) paidItems.trigger.focus();
     setPaidItems(null);
+  };
+  const closeCardPayouts = () => {
+    if (cardPayouts?.trigger.isConnected) cardPayouts.trigger.focus();
+    setCardPayouts(null);
   };
 
   return (
@@ -180,6 +230,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
         // расчёт не запускается — иначе сервер досчитывал бы брошенный прежний месяц.
         calcReady={!monthsQuery.isPending}
         onOpenPaidItems={(row, kind, trigger, months) => setPaidItems({ row, kind, trigger, months })}
+        onOpenCardPayouts={(row, trigger, months) => setCardPayouts({ row, trigger, months })}
         actionsExtra={(
           <>
             <button
@@ -209,7 +260,7 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
             >
               Справочник
             </button>
-            {importCapability.data === true && (
+            {importCapability.data?.can_import === true && (
               <button
                 ref={importButtonRef}
                 type="button"
@@ -218,6 +269,17 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
                 onClick={() => setImportOpen(true)}
               >
                 Загрузить из 1С
+              </button>
+            )}
+            {importCapability.data?.can_view_journal === true && (
+              <button
+                ref={journalButtonRef}
+                type="button"
+                className={styles.dictionaryButton}
+                aria-haspopup="dialog"
+                onClick={() => setJournalOpen(true)}
+              >
+                Ведомости 1С
               </button>
             )}
           </>
@@ -229,6 +291,23 @@ export const PayrollDeductionsPage: FC<IPayrollDeductionsPageProps> = ({
       {importOpen && (
         <Suspense fallback={null}>
           <Payroll1cImportModal onClose={closeImport} />
+        </Suspense>
+      )}
+
+      {journalOpen && (
+        <Suspense fallback={null}>
+          <Payroll1cJournalModal
+            initialMonths={summaryMonths}
+            monthOptions={journalMonthOptions}
+            onClose={closeJournal}
+            onOpenEmployee={(employeeId, month) => { void openEmployeeFromJournal(employeeId, month); }}
+          />
+        </Suspense>
+      )}
+
+      {cardPayouts && (
+        <Suspense fallback={null}>
+          <Payroll1cPayoutsModal row={cardPayouts.row} months={cardPayouts.months} onClose={closeCardPayouts} />
         </Suspense>
       )}
 

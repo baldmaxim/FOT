@@ -8,7 +8,7 @@ import {
   parseManualRules,
   type IDecision,
   type IManualRulePerson,
-} from '../../../scripts/lib/payouts-person-decision.js';
+} from './payroll-1c-payouts.person-decision.js';
 
 // Ручные решения пользователя генератора build-payouts-xml-sql.ts (--link «ФИО=id», --unmatched «ФИО»): применяются
 // только однозначно, иначе — стоп со списком причин. Вымышленные ФИО и коды.

@@ -29,6 +29,8 @@ interface IPayrollCalcCellProps {
   row: IPayrollTermsRow;
   /** Оформление группы «+» (тёмный итог, линии), PayrollTermsTable. */
   className?: string;
+  /** Клик по «Выплатам на карту (1С)»: окно ведомостей сотрудника; trigger — куда вернуть фокус. */
+  onOpenCardPayouts?: (row: IPayrollTermsRow, trigger: HTMLButtonElement) => void;
 }
 
 const formatAmount = (value: string | null | undefined): string => (
@@ -41,7 +43,7 @@ const formatAmount = (value: string | null | undefined): string => (
  * частичная, «Сумма» и «Остаток к выплате» — «—». Выработка бригады не введена — без ⚠: подпись «выработка не внесена»
  * под «Начислено по табелю», «Суммой» и «Остатком».
  */
-export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, className }) => {
+export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, className, onOpenCardPayouts }) => {
   const cellClass = cx(styles.cellNumber, className);
   // Столбцы ФОТ считаются отдельным запросом после строк: идёт — «…», не удалось — «—» (над таблицей «Повторить»).
   if (row.calc_status && isCalcColumn(column)) {
@@ -67,9 +69,9 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
     case 'card_payouts': {
       const lines = cardPayoutLines(row.card_payouts_by_method);
       const total = cardPayoutsTotal(lines);
-      return (
-        <td className={cellClass}>
-          {lines.length === 0 ? '—' : lines.map(line => (
+      const amounts = (
+        <>
+          {lines.map(line => (
             <span key={line.method} className={styles.calcLine}>
               <span className={styles.calcLineLabel}>{line.label}</span>
               {formatAmount(line.amount)}
@@ -81,6 +83,25 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
               {formatAmount(total)}
             </span>
           )}
+        </>
+      );
+      return (
+        <td className={cellClass}>
+          {lines.length === 0 ? '—' : onOpenCardPayouts ? (
+            // Своя кнопка: клик открывает ведомости сотрудника, а не карточку строки.
+            <button
+              type="button"
+              className={styles.payoutsButton}
+              aria-haspopup="dialog"
+              aria-label={`Ведомости 1С: ${row.full_name ?? 'сотрудник'}`}
+              onClick={event => {
+                event.stopPropagation();
+                onOpenCardPayouts(row, event.currentTarget);
+              }}
+            >
+              {amounts}
+            </button>
+          ) : amounts}
           {(row.zup3_export ?? []).map(cell => (
             <PayrollZup3Badge
               key={`${cell.month}|${cell.half}`}

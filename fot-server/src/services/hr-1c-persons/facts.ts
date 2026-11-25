@@ -28,7 +28,7 @@ export const personKeys = (p: IPerson1c): IPersonKeys => ({
   hashes: personHashes(p),
 });
 
-const PAYOUT_LINK = `resolution IN ('auto_id_all', 'confirmed') AND employee_id IS NOT NULL AND person_id_all IS NOT NULL`;
+const PAYOUT_LINK = `resolution IN ('auto_id_fot', 'auto_id_all', 'confirmed') AND employee_id IS NOT NULL AND person_id_all IS NOT NULL`;
 
 /** Карточки, связанные с этим id_all (выплаты 1С, больничные, профиль). */
 const LINKED_BY_ID_ALL_SQL = `

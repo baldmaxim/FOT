@@ -251,6 +251,8 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   const [allowTimesheetAck, setAllowTimesheetAck] = useState(apiKey.allow_timesheet_ack);
   // Приём увольнений из 1С — тоже право самого ключа (миграция 372), пишет «Оплачено».
   const [allowDismissals, setAllowDismissals] = useState(apiKey.allow_payroll_dismissal_import === true);
+  // Приём ведомостей выплаты из 1С (миграция 379): суммы — «Выплаты на карту (1С)» «Расчётов».
+  const [allowPayouts, setAllowPayouts] = useState(apiKey.allow_payroll_payouts_import === true);
 
   const initialSelection = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -328,6 +330,9 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
       }
       if (allowDismissals !== (apiKey.allow_payroll_dismissal_import === true)) {
         await dataApiService.updateKey(apiKey.id, { allow_payroll_dismissal_import: allowDismissals });
+      }
+      if (allowPayouts !== (apiKey.allow_payroll_payouts_import === true)) {
+        await dataApiService.updateKey(apiKey.id, { allow_payroll_payouts_import: allowPayouts });
       }
     },
     onSuccess: () => {
@@ -445,6 +450,21 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                       Разрешить приём увольнений из 1С (POST /payroll/dismissals)
                       <div className={styles.muted}>
                         Приказ, компенсация отпуска и выходное пособие попадают в «Оплачено» и в расчёт ФОТ.
+                      </div>
+                    </span>
+                  </label>
+                  <label className={styles.permissionRow}>
+                    <input
+                      type="checkbox"
+                      checked={allowPayouts}
+                      onChange={e => setAllowPayouts(e.target.checked)}
+                      className={styles.permissionCheck}
+                    />
+                    <span>
+                      Разрешить приём ведомостей выплаты из 1С (POST /payroll/payouts)
+                      <div className={styles.muted}>
+                        Зарплата, аванс, отпуска, больничные, увольнения, премии — в «Выплаты на карту (1С)» «Расчётов»
+                        и в «Остаток к выплате».
                       </div>
                     </span>
                   </label>
@@ -734,6 +754,7 @@ export const DataApiPage: FC = () => {
                         ? <span className={styles.tag}>Разрешено</span>
                         : <span className={styles.muted}>—</span>}
                       {key.allow_payroll_dismissal_import && <span className={styles.tag}>Увольнения</span>}
+                      {key.allow_payroll_payouts_import && <span className={styles.tag}>Ведомости</span>}
                     </td>
                     <td>{formatDate(key.created_at)}</td>
                     <td>{key.expires_at ? formatDate(key.expires_at) : <span className={styles.muted}>—</span>}</td>

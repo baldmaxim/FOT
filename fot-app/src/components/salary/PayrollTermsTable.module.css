@@ -262,6 +262,30 @@
 .paidButton:hover { background: var(--surface-hover); }
 .paidButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* «Выплаты на карту (1С)»: виды и «Итого» — одна кнопка, открывает ведомости сотрудника */
+.payoutsButton {
+  display: block;
+  width: calc(100% + 12px);
+  min-height: 32px;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out;
+}
+.payoutsButton:hover { background: var(--surface-hover); }
+.payoutsButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* «+»/«−» у «Доплат» и «Удержаний»: раскрывает столбцы справа. Видимая 24px, зона нажатия 44×44 */
 .headToggle {
   display: inline-flex;
@@ -407,6 +431,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .paidButton,
+  .payoutsButton,
   .expandButton { transition: none; }
 }
 

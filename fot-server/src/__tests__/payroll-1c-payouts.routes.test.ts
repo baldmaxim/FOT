@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
  * Ведомости выплаты из 1С (миграция 328): загрузка — только при правке «Расчётов» и всём штате «Зарплаты».
  * Права и приём файла настоящие (resolveEffectivePageAccess, canImportPayouts1c, multer), сервис — заглушка.
  * Без права — 403 ДО приёма файла (большой файл не даёт 413); кнопка (capability) и API решаются одной функцией.
+ * Журнал «Ведомости 1С» (миграция 379) — только весь штат: частичному охвату 403 и кнопки нет.
  */
 
 const h = vi.hoisted(() => ({
@@ -83,6 +84,8 @@ const BIG = Buffer.alloc(6 * 1024 * 1024, 0x20);
 
 const capability = (userId: string, role: string) => request(app)
   .get('/api/payroll/1c-payouts/capability').set('Authorization', `Bearer ${tokenFor(userId, role)}`);
+const journal = (userId: string, role: string) => request(app)
+  .get('/api/payroll/1c-payouts/documents?months=2026-11').set('Authorization', `Bearer ${tokenFor(userId, role)}`);
 const upload = (userId: string, role: string, file: Buffer, name = 'ведомость.xml') => request(app)
   .post('/api/payroll/1c-payouts/preview')
   .set('Authorization', `Bearer ${tokenFor(userId, role)}`)
@@ -98,24 +101,29 @@ beforeEach(() => {
 describe('ведомости выплаты из 1С: права и приём файла', () => {
   it('не из списка «Зарплаты» — 403 и на кнопку, и на загрузку, даже большого файла', async () => {
     expect((await capability('outside', 'office')).status).toBe(403);
+    expect((await journal('outside', 'office')).status).toBe(403);
     expect((await upload('outside', 'office', BIG)).status).toBe(403);
     expect(h.previews).toEqual([]);
   });
 
-  it('из списка с частичным охватом (админ компании) — кнопки нет, загрузка 403 до приёма файла', async () => {
+  it('из списка с частичным охватом (админ компании) — кнопок нет, журнал и загрузка 403 (загрузка — до приёма файла)', async () => {
     h.listedUserIds.add('company-admin');
     h.scope = ['dep-1'];
     const cap = await capability('company-admin', 'admin');
     expect(cap.status).toBe(200);
-    expect(cap.body.data).toEqual({ can_import: false });
+    expect(cap.body.data).toEqual({ can_import: false, can_view_journal: false });
+    expect((await journal('company-admin', 'admin')).status).toBe(403);
     expect((await upload('company-admin', 'admin', BIG)).status).toBe(403);
     expect(h.previews).toEqual([]);
   });
 
-  it('из списка со всем штатом — кнопка есть; больше 5 МБ — 413, не .xml — 400, .xml — предпросмотр', async () => {
+  it('из списка со всем штатом — кнопки есть, журнал открывается; больше 5 МБ — 413, не .xml — 400, .xml — предпросмотр', async () => {
     h.listedUserIds.add('buh');
     const cap = await capability('buh', 'office');
-    expect(cap.body.data).toEqual({ can_import: true });
+    expect(cap.body.data).toEqual({ can_import: true, can_view_journal: true });
+    const docs = await journal('buh', 'office');
+    expect(docs.status).toBe(200);
+    expect(docs.body.data).toEqual([]);
     expect((await upload('buh', 'office', BIG)).status).toBe(413);
     expect((await upload('buh', 'office', XML, 'ведомость.xlsx')).status).toBe(400);
     const ok = await upload('buh', 'office', XML);

@@ -13,6 +13,10 @@
  * Перенос месяца (moveDocs, решение пользователя): ведомость из списка, которую 1С провела другим месяцем, грузится в
  * month; content_hash — по исходному документу 1С (с его ПериодРегистрации), как у кнопки, исходный месяц —
  * sourcePeriodMonth. Ведомость из списка уже за month — ошибка. Полноту списка по всем файлам проверяет генератор.
+ *
+ * API (parsePayout1cApiXml, POST /api/public/v1/payroll/payouts): тот же формат, месяц у каждой ведомости — свой
+ * ПериодРегистрации; дополнительно читаются «Док_Версия» (номер изменения в очереди 1С), «Комментарий» документа,
+ * «ФизЛицо/ID_FOT» и «Основание» строки. Генератор эти теги принимает и не использует.
  */
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 
@@ -37,7 +41,7 @@ const DOC_TAGS = new Set([
   'СпособВыплаты', 'Округление', 'ПроцентВыплаты', 'СуммаПоДокументу', 'Руководитель', 'ДолжностьРуководителя',
   'ГлавныйБухгалтер', 'Бухгалтер', 'ПеречислениеНДФЛВыполнено', 'ПеречислениеНДФЛРеквизиты', 'ВводНачальныхДанных',
   'КраткийСоставДокумента', 'Комментарий', 'Состав', 'Зарплата', 'Зарплата_руководство', 'отпуска', 'Основания',
-  'ФизическиеЛица',
+  'ФизическиеЛица', 'Док_Версия',
 ]);
 const SECTIONS = ['Зарплата', 'Зарплата_руководство'] as const;
 
@@ -59,6 +63,26 @@ export interface IPayout1cMonthDocument extends IPayout1cDocument {
   leadershipLines: number;
   /** ПериодРегистрации 1С, если ведомость перенесена в month решением пользователя (moveDocs); иначе null. */
   sourcePeriodMonth: string | null;
+}
+
+/** Строка ведомости из API: присланный ID_FOT и основание. */
+export interface IPayoutApiLine {
+  lineNo: number;
+  lineKey: string;
+  fullName: string;
+  personIdAll: string | null;
+  brigade: string | null;
+  amountCents: number;
+  idFot: number | null;
+  basis: string | null;
+}
+
+/** Ведомость из API: версия очереди 1С, комментарий, строки с ID_FOT и основанием; месяц — свой ПериодРегистрации. */
+export interface IPayoutApiDocument extends Omit<IPayout1cMonthDocument, 'lines'> {
+  index: number;
+  version: number | null;
+  comment: string | null;
+  lines: IPayoutApiLine[];
 }
 
 export interface IPayout1cMonthXmlOptions {
@@ -121,7 +145,19 @@ export const guid = (raw: string, where: string): string => {
   return value;
 };
 
-interface IRawLine { fullName: string; personIdAll: string | null; brigade: null; amountCents: number }
+interface IRawLine {
+  fullName: string; personIdAll: string | null; brigade: null; amountCents: number; idFot: number | null; basis: string | null;
+}
+
+const ID_FOT_RE = /^[1-9]\d{0,9}$/;
+/** Основание строки и комментарий документа — без управляющих символов, до max знаков (длиннее — ошибка). */
+const plainText = (raw: string | null, max: number, where: string): string | null => {
+  if (raw === null) return null;
+  // eslint-disable-next-line no-control-regex
+  const value = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
+  if (value.length > max) fail(`${where}: длиннее ${max} знаков`);
+  return value === '' ? null : value;
+};
 
 /** Строки раздела: именные — строки; «00000» без ФИО (только в «Зарплате») — сумма дубля. */
 const sectionLines = (doc: XmlNode, section: (typeof SECTIONS)[number], at: string): { lines: IRawLine[]; duplicate: number } => {
@@ -131,7 +167,7 @@ const sectionLines = (doc: XmlNode, section: (typeof SECTIONS)[number], at: stri
   assertKnownTags(node, new Set(['расшифровка']), `${at}, «${section}»`);
   for (const [index, entry] of listOf(node.расшифровка).entries()) {
     const where = `${at}, «${section}», строка ${index + 1}`;
-    assertKnownTags(entry, new Set(['ФизЛицо', 'КВыплате']), where);
+    assertKnownTags(entry, new Set(['ФизЛицо', 'КВыплате', 'Основание']), where);
     const person = child(entry, 'ФизЛицо', where);
     const name = text(person, 'наименование', where, false);
     const amount = parseAmountCents(text(entry, 'КВыплате', where, false) ?? '0', where);
@@ -144,14 +180,24 @@ const sectionLines = (doc: XmlNode, section: (typeof SECTIONS)[number], at: stri
     }
     if (amount <= 0) fail(`${where}: сумма должна быть больше нуля`);
     const idAll = text(person, 'id_all', where, false);
-    lines.push({ fullName: name, personIdAll: idAll === null ? null : guid(idAll, where), brigade: null, amountCents: amount });
+    const idFotRaw = text(person, 'ID_FOT', where, false);
+    if (idFotRaw !== null && !ID_FOT_RE.test(idFotRaw)) fail(`${where}: ID_FOT «${idFotRaw}» — не номер сотрудника ФОТ`);
+    lines.push({
+      fullName: name,
+      personIdAll: idAll === null ? null : guid(idAll, where),
+      brigade: null,
+      amountCents: amount,
+      idFot: idFotRaw === null ? null : Number(idFotRaw),
+      basis: plainText(text(entry, 'Основание', where, false), 500, `${where}, «Основание»`),
+    });
   }
   return { lines, duplicate };
 };
 
+/** Ведомость файла. month = null — API: месяц ведомости — её ПериодРегистрации, перенос не применяется. */
 const parseDocument = (
-  doc: XmlNode, index: number, month: string, moveDocs: ReadonlySet<string>,
-): IPayout1cMonthDocument => {
+  doc: XmlNode, index: number, month: string | null, moveDocs: ReadonlySet<string>,
+): IPayout1cMonthDocument & { rawDoc: XmlNode; apiLines: IRawLine[] } => {
   const at = `Документ ${index + 1}`;
   assertKnownTags(doc, DOC_TAGS, at);
   const docKind = text(doc, 'имя_док', at) as string;
@@ -162,8 +208,9 @@ const parseDocument = (
   const docNumber = text(doc, 'Док_Номер', at) as string;
   const where = `${at} (${docNumber})`;
   const periodMonth = isoDate(doc, 'ПериодРегистрации', where);
-  const targetMonth = `${month}-01`;
-  const moved = moveDocs.has(docNumber);
+  if (!periodMonth.endsWith('-01')) fail(`${where}: «ПериодРегистрации» — не первое число месяца`);
+  const targetMonth = month === null ? periodMonth : `${month}-01`;
+  const moved = month !== null && moveDocs.has(docNumber);
   if (moved && periodMonth === targetMonth) fail(`${where}: в списке переноса, но 1С уже провела её за ${month}`);
   if (!moved && periodMonth !== targetMonth) fail(`${where}: месяц начисления ${periodMonth}, ожидался ${month}`);
 
@@ -182,7 +229,10 @@ const parseDocument = (
   }
 
   const keys = buildPayoutLineKeys(rawLines);
-  const lines = rawLines.map((line, i) => ({ ...line, lineNo: i + 1, lineKey: keys[i] }));
+  const lines = rawLines.map((line, i) => ({
+    lineNo: i + 1, lineKey: keys[i], fullName: line.fullName, personIdAll: line.personIdAll, brigade: line.brigade,
+    amountCents: line.amountCents,
+  }));
   const header = {
     format: 'zup2' as const,
     guid: guid(text(doc, 'Док_Гуид', where) as string, where),
@@ -206,8 +256,13 @@ const parseDocument = (
     duplicateCents: salary.duplicate,
     leadershipLines: leadership.lines.length,
     sourcePeriodMonth: moved ? periodMonth : null,
+    rawDoc: doc,
+    apiLines: rawLines,
   };
 };
+
+/** Ведомость генератора — без служебных полей разбора. */
+const forMonth = ({ rawDoc: _rawDoc, apiLines: _apiLines, ...doc }: ReturnType<typeof parseDocument>): IPayout1cMonthDocument => doc;
 
 /**
  * Дерево XML-выгрузки 1С: без DOCTYPE/ENTITY, значения строками, массивы — пути arrayPaths. Корень любой — его имя
@@ -253,17 +308,54 @@ export const parsePayout1cMonthXml = (
   const container = child(root, 'ЗарплатаКВыплатеОрганизаций', 'Файл');
   assertKnownTags(container, new Set(['документ']), 'Файл');
   const moveDocs = options.moveDocs ?? new Set<string>();
-  const docs = listOf(container.документ).map((doc, index) => parseDocument(doc, index, month, moveDocs));
+  const docs = listOf(container.документ).map((doc, index) => forMonth(parseDocument(doc, index, month, moveDocs)));
   if (docs.length === 0) fail('В файле нет документов');
+  assertUniqueDocs(docs);
+  return docs;
+};
 
+/** ГУИД и «организация + номер + дата» в файле не повторяются. */
+const assertUniqueDocs = (docs: ReadonlyArray<{ guid: string; docNumber: string; docDate: string; organizationInn: string }>): void => {
   const guids = new Set<string>();
   const numbers = new Set<string>();
   for (const doc of docs) {
     if (guids.has(doc.guid)) fail(`ГУИД ${doc.guid} повторяется`);
-    const key = `${doc.docNumber}|${doc.docDate}`;
+    const key = `${doc.organizationInn}|${doc.docNumber}|${doc.docDate}`;
     if (numbers.has(key)) fail(`Ведомость ${doc.docNumber} от ${doc.docDate} повторяется`);
     guids.add(doc.guid);
     numbers.add(key);
   }
+};
+
+/** Наибольшее число ведомостей в одном запросе API. */
+export const PAYOUT_API_MAX_DOCS = 200;
+
+/**
+ * Разбор выгрузки ведомостей из API: месяц каждой — свой ПериодРегистрации, «Док_Версия» — целое > 0 или нет (без
+ * версии запись не принимается — проверяет сервис), комментарий документа, ID_FOT и основание строк.
+ */
+export const parsePayout1cApiXml = (xml: string): IPayoutApiDocument[] => {
+  const root = parseZupXmlTree(xml, ARRAY_PATHS);
+  assertKnownTags(root, new Set(['имя', 'версия', 'ЗарплатаКВыплатеОрганизаций']), 'Файл');
+  if (text(root, 'имя', 'Файл') !== ROOT_NAME) fail('Файл: не выгрузка ведомостей выплаты («имя»)');
+  const container = child(root, 'ЗарплатаКВыплатеОрганизаций', 'Файл');
+  assertKnownTags(container, new Set(['документ']), 'Файл');
+  const raw = listOf(container.документ);
+  if (raw.length === 0) fail('В файле нет документов');
+  if (raw.length > PAYOUT_API_MAX_DOCS) fail(`В одном запросе — не больше ${PAYOUT_API_MAX_DOCS} ведомостей`);
+  const docs = raw.map((node, index): IPayoutApiDocument => {
+    const { rawDoc, apiLines, ...parsed } = parseDocument(node, index, null, new Set());
+    const where = `Документ ${index + 1} (${parsed.docNumber})`;
+    const versionRaw = text(rawDoc, 'Док_Версия', where, false);
+    if (versionRaw !== null && !/^[1-9]\d{0,14}$/.test(versionRaw)) fail(`${where}: «Док_Версия» — целое больше нуля`);
+    return {
+      ...parsed,
+      index,
+      version: versionRaw === null ? null : Number(versionRaw),
+      comment: plainText(text(rawDoc, 'Комментарий', where, false), 1000, `${where}, «Комментарий»`),
+      lines: parsed.lines.map((line, i) => ({ ...line, idFot: apiLines[i].idFot, basis: apiLines[i].basis })),
+    };
+  });
+  assertUniqueDocs(docs);
   return docs;
 };

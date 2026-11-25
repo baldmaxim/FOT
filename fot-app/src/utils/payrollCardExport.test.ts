@@ -170,7 +170,8 @@ describe('лист «История выплат»', () => {
   it('«Перечислено (1С)»: месяц только с перечислением, несколько ведомостей за месяц — сумма в копейках', () => {
     const payout = (month: string, amountValue: string, documentId: number) => ({
       month, document_id: documentId, doc_number: `0000-00${documentId}`, zup2_number: null, doc_date: '2026-10-09',
-      payment_method: 'Зарплата', amount: amountValue,
+      payment_method: 'Зарплата', amount: amountValue, organization_inn: '7736255508', origin: 'file' as const, comment: null,
+      basis: null,
     });
     const { rows } = buildPaidHistorySheet('Иванов', paid, [
       payout('2026-09', '43500.00', 1),

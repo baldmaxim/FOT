@@ -1,0 +1,71 @@
+/*
+ * «Ведомости 1С» на «Расчётах» и окно ведомости: оверлей, шапка и тело — из PayrollModal.module.css, таблица —
+ * RegistryPanel. Размер — как у «Свода»: на телефоне вся область, с 768px — 90% ширины и высоты.
+ */
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+/* Тело — колонка: таблица занимает остаток высоты и прокручивается внутри (data-registry-fill). */
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Окно ведомости: вид, организация, откуда, состояние и комментарий над таблицей строк. */
+.docInfo {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.docLine,
+.docComment,
+.warn {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.docLine { color: var(--text-secondary); }
+.docComment { color: var(--text-primary); }
+.warn { color: var(--warning); font-weight: 500; }
+
+/* Сотрудник ФОТ в строке ведомости — ссылка на его карточку «Расчётов». */
+.employeeLink {
+  display: inline;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.employeeLink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (min-width: 768px) {
+  .container {
+    width: min(90vw, 100%);
+    height: min(90dvh, 100%);
+  }
+}

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { dataApiAuth } from '../middleware/dataApiAuth.js';
 import { dataApiRequestLog } from '../middleware/dataApiRequestLog.js';
 import { publicDataApiController } from '../controllers/public-data-api.controller.js';
@@ -6,6 +6,7 @@ import { publicTimesheetsController } from '../controllers/public-timesheets.con
 import { publicStaffMonthController } from '../controllers/public-staff-month.controller.js';
 import { publicDismissalsController } from '../controllers/public-dismissals.controller.js';
 import { publicEmployeesController } from '../controllers/public-employees.controller.js';
+import { PAYOUTS_BODY_LIMIT, payoutsBodyErrorHandler, publicPayoutsController } from '../controllers/public-payouts.controller.js';
 import { dataApiLimiter } from '../middleware/dataApiRateLimit.js';
 
 // Публичная часть data-api на Node (рядом с Python /external/v1): расчётные
@@ -43,5 +44,13 @@ router.post('/staff-month/ack', publicStaffMonthController.ack);
 
 // Увольнение из 1С ЗУП3: приказ, компенсация отпуска, выходное пособие (право allow_payroll_dismissal_import).
 router.post('/payroll/dismissals', publicDismissalsController.post);
+// Ведомости выплаты из 1С: XML «зп_документы_31» до 25 МБ и отмена (право allow_payroll_payouts_import).
+router.post(
+  '/payroll/payouts',
+  express.raw({ type: ['application/xml', 'text/xml'], limit: PAYOUTS_BODY_LIMIT }),
+  publicPayoutsController.post,
+);
+router.post('/payroll/payouts/cancel', publicPayoutsController.cancel);
+router.use('/payroll/payouts', payoutsBodyErrorHandler);
 
 export default router;

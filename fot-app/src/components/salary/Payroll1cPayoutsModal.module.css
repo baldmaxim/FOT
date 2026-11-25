@@ -1,0 +1,132 @@
+/*
+ * Окно «Ведомости 1С» сотрудника на «Расчётах» (клик по «Выплатам на карту (1С)»): оверлей, шапка и прокручиваемое
+ * тело — из PayrollModal.module.css. Ведомость — карточкой (вид и сумма, под ними номер, дата, организация, откуда,
+ * комментарий и основание): читается и на 360px, без прокрутки вбок.
+ */
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: min(85dvh, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xl);
+  font-family: var(--font-primary);
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.state { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.stateError { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--error); }
+.retryButton {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.retryButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.month + .month { margin-top: 18px; }
+
+.monthHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.docTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.method { min-width: 0; overflow-wrap: anywhere; }
+
+.meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.noteLabel { color: var(--text-secondary); }
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mismatch {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--warning);
+}
+
+@media (min-width: 768px) {
+  .retryButton { min-height: 36px; }
+}

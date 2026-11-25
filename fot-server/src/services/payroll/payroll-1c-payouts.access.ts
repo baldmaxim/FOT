@@ -11,3 +11,12 @@ export async function canImportPayouts1c(req: AuthenticatedRequest): Promise<boo
   if (!(await resolveEffectivePageAccess(req, '/salary/payments', 'edit'))) return false;
   return (await resolvePayrollReadableDepartmentIds(req)) === 'all';
 }
+
+/**
+ * Журнал ведомостей 1С («Ведомости 1С» на «Расчётах»): просмотр «Расчётов» и весь штат «Зарплаты» — в ведомости суммы
+ * всей организации. Частичному охвату — только ведомости своих сотрудников (окно ячейки, карточка).
+ */
+export async function canViewPayouts1cJournal(req: AuthenticatedRequest): Promise<boolean> {
+  if (!(await resolveEffectivePageAccess(req, '/salary/payments', 'view'))) return false;
+  return (await resolvePayrollReadableDepartmentIds(req)) === 'all';
+}

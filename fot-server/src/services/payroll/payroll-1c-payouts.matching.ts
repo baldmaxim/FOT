@@ -160,7 +160,7 @@ export const matchPayoutLines = async (
     ),
     idAlls.length === 0 ? [] : query<{ employee_id: number; id_all: string }>(
       `SELECT DISTINCT employee_id, person_id_all::text AS id_all FROM payroll_1c_payout_lines
-        WHERE person_id_all = ANY($1::uuid[]) AND employee_id IS NOT NULL AND resolution IN ('auto_id_all', 'confirmed')`,
+        WHERE person_id_all = ANY($1::uuid[]) AND employee_id IS NOT NULL AND resolution IN ('auto_id_fot', 'auto_id_all', 'confirmed')`,
       [idAlls],
     ),
     query<{ id: number; name_key: string }>(
