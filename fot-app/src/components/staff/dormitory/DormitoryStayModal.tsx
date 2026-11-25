@@ -13,6 +13,7 @@ import {
 import { penaltyCandidateNote } from '../../../utils/dormitoryPenalties';
 import {
   DORMITORY_ADDRESS_MAX_LENGTH,
+  DORMITORY_STAY_DATE_LABELS,
   DORMITORY_STAY_KIND_LABELS,
   parseDormitoryStay,
   type DormitoryStayField,
@@ -90,6 +91,9 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   const [address, setAddress] = useState(stay?.address ?? initialAddress ?? '');
   const [comment, setComment] = useState(stay?.comment ?? '');
   const isApartment = kind === 'apartment';
+  // Компенсация аренды (25.11.2026) — «Начало / Окончание»; общежитие и служебная квартира — «Дата въезда / выезда».
+  const dateLabels = isApartment ? 'compensation' : 'stay';
+  const dateLabelText = DORMITORY_STAY_DATE_LABELS[dateLabels];
   const [error, setError] = useState<{ field: DormitoryStayField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const checkPenalties = penaltyCheck && !isEdit && employee !== null;
@@ -118,6 +122,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
       { checkIn, checkOut, address: flatAddress ?? address },
       { required: !isEdit, selected: employee !== null },
       kind,
+      dateLabels,
     );
     if (!parsed.ok) {
       setError({ field: parsed.field, message: parsed.message });
@@ -200,7 +205,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
       {/* Не <label>: внутри поля даты — кнопка календаря, клик по подписи открыл бы её. */}
       <div className={styles.dates}>
         <div className={styles.field}>
-          <span className={styles.label}>Дата въезда</span>
+          <span className={styles.label}>{dateLabelText.checkIn}</span>
           <DateInput
             value={checkIn}
             onChange={value => { setCheckIn(value); clearError(); }}
@@ -209,7 +214,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
           />
         </div>
         <div className={styles.field}>
-          <span className={styles.label}>Дата выезда</span>
+          <span className={styles.label}>{dateLabelText.checkOut}</span>
           <DateInput
             value={checkOut}
             onChange={value => { setCheckOut(value); clearError(); }}

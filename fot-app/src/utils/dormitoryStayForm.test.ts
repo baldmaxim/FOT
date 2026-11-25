@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DORMITORY_STAY_DATE_LABELS,
   dormitoryAddressOptions,
   isCalendarDate,
   parseDormitoryStay,
@@ -66,6 +67,21 @@ describe('parseDormitoryStay', () => {
     expect(parseDormitoryStay({ ...draft, checkOut: '2026-11-31' }, picked)).toMatchObject({ field: 'check_out' });
     expect(parseDormitoryStay({ ...draft, address: '   ' }, picked)).toMatchObject({ field: 'address' });
     expect(parseDormitoryStay({ ...draft, address: 'а'.repeat(201) }, picked)).toMatchObject({ field: 'address' });
+  });
+
+  it('«Компенсация аренды» (25.11.2026): поля «Начало / Окончание» и ошибки теми же словами; остальные — как были', () => {
+    expect(DORMITORY_STAY_DATE_LABELS.compensation).toEqual({ checkIn: 'Начало', checkOut: 'Окончание' });
+    expect(DORMITORY_STAY_DATE_LABELS.stay).toEqual({ checkIn: 'Дата въезда', checkOut: 'Дата выезда' });
+    const compensation = { ...draft, address: '' };
+    expect(parseDormitoryStay({ ...compensation, checkIn: '' }, picked, 'apartment', 'compensation'))
+      .toEqual({ ok: false, field: 'check_in', message: 'Укажите дату начала' });
+    expect(parseDormitoryStay({ ...compensation, checkOut: '2026-10-01' }, picked, 'apartment', 'compensation'))
+      .toEqual({ ok: false, field: 'check_out', message: 'Окончание должно быть позже начала' });
+    expect(parseDormitoryStay({ ...compensation, checkOut: '2026-10-16' }, picked, 'apartment', 'compensation'))
+      .toEqual({ ok: true, payload: { check_in: '2026-10-01', check_out: '2026-10-16', address: null, amount: null } });
+    // «Зарплата» → «Доплата» → «Квартира» (без dateLabels) — прежние слова.
+    expect(parseDormitoryStay({ ...compensation, checkOut: '2026-10-01' }, picked, 'apartment'))
+      .toMatchObject({ message: 'Дата выезда должна быть позже даты въезда' });
   });
 });
 

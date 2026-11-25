@@ -44,21 +44,39 @@ export const isCalendarDate = (value: string): boolean => {
 };
 
 /**
+ * Подписи дат в окне: 'stay' — «Дата въезда / выезда» (общежитие, квартира, «Доплата» «Зарплаты»), 'compensation' —
+ * «Начало / Окончание» (вкладка «Компенсация аренды», 25.11.2026). Тексты ошибок — теми же словами, что поля.
+ */
+export type DormitoryStayDateLabels = 'stay' | 'compensation';
+
+export const DORMITORY_STAY_DATE_LABELS: Record<DormitoryStayDateLabels, { checkIn: string; checkOut: string }> = {
+  stay: { checkIn: 'Дата въезда', checkOut: 'Дата выезда' },
+  compensation: { checkIn: 'Начало', checkOut: 'Окончание' },
+};
+
+const DATE_MESSAGES: Record<DormitoryStayDateLabels, { checkInRequired: string; checkOutAfter: string }> = {
+  stay: { checkInRequired: 'Укажите дату въезда', checkOutAfter: 'Дата выезда должна быть позже даты въезда' },
+  compensation: { checkInRequired: 'Укажите дату начала', checkOutAfter: 'Окончание должно быть позже начала' },
+};
+
+/**
  * Общежитие: адрес обязателен, суммы нет. Квартира: адрес — по желанию (пусто — null); ставка ₽/день больше нуля
  * обязательна, если её спрашивают («Зарплата»), у кадров — null. Даты у обоих: въезд обязателен, выезд позже въезда
- * или пусто (живёт).
+ * или пусто (живёт). dateLabels — каким словами говорить о датах в ошибках (как подписаны поля окна).
  */
 export const parseDormitoryStay = (
   draft: IDormitoryStayDraft,
   employee: { required: boolean; selected: boolean },
   kind: DormitoryStayKind = 'dormitory',
+  dateLabels: DormitoryStayDateLabels = 'stay',
 ): DormitoryStayParse => {
+  const messages = DATE_MESSAGES[dateLabels];
   if (employee.required && !employee.selected) return { ok: false, field: 'employee', message: 'Выберите сотрудника' };
-  if (!draft.checkIn) return { ok: false, field: 'check_in', message: 'Укажите дату въезда' };
+  if (!draft.checkIn) return { ok: false, field: 'check_in', message: messages.checkInRequired };
   if (!isCalendarDate(draft.checkIn)) return { ok: false, field: 'check_in', message: 'Такой даты нет' };
   if (draft.checkOut && !isCalendarDate(draft.checkOut)) return { ok: false, field: 'check_out', message: 'Такой даты нет' };
   if (draft.checkOut && draft.checkOut <= draft.checkIn) {
-    return { ok: false, field: 'check_out', message: 'Дата выезда должна быть позже даты въезда' };
+    return { ok: false, field: 'check_out', message: messages.checkOutAfter };
   }
   const address = normalizeAddress(draft.address);
   if (address.length > DORMITORY_ADDRESS_MAX_LENGTH) {
