@@ -5,6 +5,7 @@ import { publicDataApiController } from '../controllers/public-data-api.controll
 import { publicTimesheetsController } from '../controllers/public-timesheets.controller.js';
 import { publicStaffMonthController } from '../controllers/public-staff-month.controller.js';
 import { publicDismissalsController } from '../controllers/public-dismissals.controller.js';
+import { publicEmployeesController } from '../controllers/public-employees.controller.js';
 import { dataApiLimiter } from '../middleware/dataApiRateLimit.js';
 
 // Публичная часть data-api на Node (рядом с Python /external/v1): расчётные
@@ -19,6 +20,8 @@ router.use(dataApiAuth);
 router.use(dataApiLimiter);
 
 router.get('/employee-events', publicDataApiController.getEmployeeEvents);
+// Справочник сотрудников для 1С: ID_FOT ↔ код физлица 1С, ФИО, дата рождения (1С сама проставляет ID_FOT).
+router.get('/employees', publicEmployeesController.list);
 router.get('/timesheet', publicDataApiController.getDepartmentTimesheet);
 
 // Обмен закрытыми согласованными табелями: список → выгрузка версии → подтверждение.

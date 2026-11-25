@@ -80,6 +80,8 @@ tags:
     description: Ранее существовавшие методы. Расчёт на лету, без версионирования.
   - name: dismissals
     description: Увольнение из 1С ЗУП3 — приказ, компенсация отпуска и выходное пособие (запись в ФОТ).
+  - name: employees
+    description: Справочник сотрудников — ID_FOT, код физлица 1С, ФИО, дата рождения; по нему 1С проставляет ID_FOT.
   - name: staff-month
     description: |
       Сотрудники месяца для ЗУП3: основной объект, факт и норма часов, категория (рабочий / ИТР / офис), дни с
@@ -627,6 +629,74 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /employees:
+    get:
+      tags: [employees]
+      operationId: listEmployeesDirectory
+      summary: Справочник сотрудников — ID_FOT, код физлица 1С, ФИО, дата рождения
+      description: |
+        Свои сотрудники СУ-10 и СМ без подрядчиков, работающие и уволенные с 01.06.2026 — те же, что в «сотрудниках
+        месяца». По возрастанию employee_id, страница — `after_id` = `next_after_id`. Нужен доступ ключа к таблице `employees`.
+      parameters:
+        - name: id_all
+          in: query
+          description: Код физлица 1С (UUID).
+          schema:
+            type: string
+            format: uuid
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, fired]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+        - name: after_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Страница справочника.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DirectoryEmployee'
+                  meta:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                      with_id_all:
+                        type: integer
+                  next_after_id:
+                    type: [integer, 'null']
+        '400':
+          $ref: '#/components/responses/StaffMonthError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
   /staff-month:
     get:
       tags: [staff-month]
@@ -1664,6 +1734,54 @@ components:
           $ref: '#/components/schemas/StaffMonthObject'
         hours:
           type: number
+    DirectoryEmployee:
+      type: object
+      properties:
+        employee_id:
+          type: integer
+          description: ID_FOT.
+        id_all:
+          type: [string, 'null']
+          format: uuid
+          description: Код физлица 1С; null — в ФОТ не заполнен.
+        full_name:
+          type: [string, 'null']
+        last_name:
+          type: [string, 'null']
+        first_name:
+          type: [string, 'null']
+        middle_name:
+          type: [string, 'null']
+        birth_date:
+          type: [string, 'null']
+          format: date
+        tab_number:
+          type: [string, 'null']
+        organization:
+          type: [object, 'null']
+          properties:
+            inn:
+              type: string
+            name:
+              type: string
+        department:
+          type: [object, 'null']
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+        position:
+          type: [string, 'null']
+        hire_date:
+          type: [string, 'null']
+          format: date
+        dismissal_date:
+          type: [string, 'null']
+          format: date
+        status:
+          type: string
+          enum: [active, fired]
     StaffMonthEnvelope:
       type: object
       required: [success, period, snapshot, data, meta, next_cursor]

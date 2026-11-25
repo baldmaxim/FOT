@@ -36,7 +36,8 @@ const LABEL: Record<IZup3ExportCell['state'], string> = {
 };
 
 /**
- * Статус выгрузки объектов и часов в ЗУП3 за половину месяца — строкой под выплатами 1С в «Расчётах». «Выгружен»
+ * Статус выгрузки табеля (объекты и часы) в ЗУП3 за половину месяца — строкой под выплатами 1С в «Расчётах»; подпись
+ * «Табель в ЗУП3», чтобы не путать с выплатами. «Выгружен»
  * ставится сам, когда 1С подтвердила приём данных этой половины; «Не готов» — половина не закончилась или табель за
  * неё не закрыт.
  */
@@ -51,7 +52,7 @@ export const PayrollZup3Badge: FC<IPayrollZup3BadgeProps> = ({ cell, showMonth }
   ].filter(Boolean).join('\n');
   return (
     <span className={`${styles.badge} ${styles[cell.state]}`} title={title || undefined}>
-      <span className={styles.prefix}>ЗУП3{showMonth ? ` · ${monthLabel(cell.month)}` : ''} {halfLabel(cell.month, cell.half)}:</span>
+      <span className={styles.prefix}>Табель в ЗУП3{showMonth ? ` · ${monthLabel(cell.month)}` : ''} {halfLabel(cell.month, cell.half)}:</span>
       {LABEL[cell.state]}{acked}
     </span>
   );
