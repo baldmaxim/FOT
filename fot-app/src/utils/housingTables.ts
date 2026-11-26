@@ -450,6 +450,14 @@ export const buildDormitoryArchiveExport = (title: string, monthLabel: string) =
 
 const dayCount = (value: number | null): string => (value === null ? '—' : String(value));
 
+/**
+ * «Приостановлена» строки: дата паузы, только если компенсация приостановлена (галочка стоит); возобновлённая в месяце
+ * — без даты. Прежний бэкенд не присылает suspended — дата как есть.
+ */
+export const pausedFromOf = (row: Pick<ICompensationMonthRow, 'suspended' | 'paused_from'>): string | null => (
+  row.suspended === false ? null : row.paused_from ?? null
+);
+
 /** Как документ 1С «Список сотрудников для получения возмещения за проживание». */
 export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMonthRow>> = [
   employeeColumn<ICompensationMonthRow>(),
@@ -469,12 +477,14 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
     text: row => orDash(row.department),
     sortValue: row => row.department,
   },
-  // Ширина — под самое длинное слово подписи («КОМПЕНСАЦИИ», «ОБНОВЛЕНО») со стрелкой и воронкой.
-  // Начало — первой записи цепочки «пауза → возобновление» (миграция 374).
+  // Ширина — под самое длинное слово подписи («КОМПЕНСАЦИИ», «ДОКУМЕНТОВ») со стрелкой и воронкой.
+  // Начало — первой записи цепочки «пауза → возобновление» (миграция 374), справочное — если раньше расчёта (380).
   dateColumn<ICompensationMonthRow>('check_in', 'Начало компенсации', row => row.compensation_start ?? row.check_in, 160),
   // Подпись в одно слово не переносится: ширина — под неё со стрелкой и воронкой. «Возобновлена» убрана 24.11.2026.
-  dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', row => row.paused_from, 188),
-  dateColumn<ICompensationMonthRow>('updated_at', 'Обновлено', row => row.updated_at?.slice(0, 10) ?? null, 144),
+  // Дата — только у приостановленной сейчас (галочка, 26.11.2026); на экране — галочка с датой (CompensationPanel).
+  dateColumn<ICompensationMonthRow>('paused_from', 'Приостановлена', pausedFromOf, 188),
+  // Не updated_at (время любой правки записи) — дата, которую вносят кадры (миграция 380, 26.11.2026).
+  dateColumn<ICompensationMonthRow>('docs_updated_on', 'Обновление документов', row => row.docs_updated_on ?? null, 150),
   {
     key: 'weekend_days',
     label: 'Кол-во выходных',
@@ -523,6 +533,18 @@ export const COMPENSATION_COLUMNS: ReadonlyArray<IRegistryColumn<ICompensationMo
     width: 128,
     text: row => orDash(row.country),
     sortValue: row => row.country ?? null,
+  },
+  // Файлы компенсации сотрудника (миграция 380): на экране — 📎N, в xlsx — число.
+  {
+    key: 'files',
+    label: 'Файлы',
+    type: 'int',
+    width: 96,
+    nowrap: true,
+    numeric: true,
+    text: row => (row.files_count ? String(row.files_count) : '—'),
+    sortValue: row => row.files_count ?? 0,
+    exportValue: row => row.files_count ?? 0,
   },
 ];
 
@@ -597,7 +619,8 @@ export const compensationArchiveRows = (
       seen.add(previous.id);
       current = previous;
     }
-    return current.check_in;
+    // Справочное «Начало» (миграция 380) — раньше начала расчёта.
+    return current.since_on ?? current.check_in;
   };
   return stays
     .filter(stay => stay.kind === 'apartment' && !stay.suspended && closedInMonth(stay, month, today))

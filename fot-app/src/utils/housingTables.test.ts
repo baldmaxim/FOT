@@ -20,6 +20,7 @@ import {
   housingMonthOptions,
   livesOn,
   parseSavedHousingMonth,
+  pausedFromOf,
   readHousingReturn,
   stripHousingReturn,
   touchesMonth,
@@ -174,6 +175,40 @@ describe('«Проживание»: архив за месяц, «Возобно
     params.set('q', 'Иванов');
     expect(stripHousingReturn(params)?.toString()).toBe('q=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2');
     expect(stripHousingReturn(new URLSearchParams('q=1'))).toBeNull();
+  });
+});
+
+describe('«Компенсация аренды»: «Обновление документов», галочка паузы, файлы (26.11.2026, миграция 380)', () => {
+  const row = (over: Partial<ICompensationMonthRow> = {}): ICompensationMonthRow => ({
+    ...stay({ kind: 'apartment', address: null, amount: '630.00', full_name: 'Киличов Шухрат Рустамович' }),
+    month: '2026-11', month_amount: '0.00', worked_days: 0, weekend_days: 0, ...over,
+  });
+  const column = (key: string) => COMPENSATION_COLUMNS.find(item => item.key === key)!;
+
+  it('«Обновлено» (время правки записи) → «Обновление документов» — дата кадров, нет — прочерк', () => {
+    const labels = COMPENSATION_COLUMNS.map(item => item.label);
+    expect(labels).not.toContain('Обновлено');
+    expect(labels).toContain('Обновление документов');
+    expect(column('docs_updated_on').text(row({ updated_at: '2026-11-25T13:50:52Z' }))).toBe('—');
+    expect(column('docs_updated_on').text(row({ docs_updated_on: '2026-11-19' }))).toBe('19.11.2026');
+  });
+
+  it('«Приостановлена» — дата только у приостановленной сейчас; возобновлённая в месяце — прочерк', () => {
+    expect(column('paused_from').text(row({ suspended: true, paused_from: '2026-11-16' }))).toBe('16.11.2026');
+    expect(column('paused_from').text(row({ suspended: false, paused_from: '2026-11-16', resumed_from: '2026-11-20' }))).toBe('—');
+    expect(pausedFromOf({ suspended: false, paused_from: '2026-11-16' })).toBeNull();
+  });
+
+  it('«Файлы» — число на экране и в xlsx; нет — прочерк и 0', () => {
+    expect(column('files').text(row({ files_count: 3 }))).toBe('3');
+    expect(column('files').exportValue!(row({ files_count: 3 }))).toBe(3);
+    expect(column('files').text(row())).toBe('—');
+    expect(column('files').exportValue!(row())).toBe(0);
+  });
+
+  it('архив: «Начало» — справочное первой записи цепочки, если есть', () => {
+    const ended = stay({ id: 20, kind: 'apartment', check_in: '2026-11-01', since_on: '2023-04-19', check_out: '2026-11-20' });
+    expect(compensationArchiveRows([ended], '2026-11', '2026-11-26').map(item => item.compensation_start)).toEqual(['2023-04-19']);
   });
 });
 

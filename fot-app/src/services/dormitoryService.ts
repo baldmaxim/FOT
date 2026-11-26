@@ -37,6 +37,10 @@ export interface IDormitoryStay {
   suspended?: boolean;
   /** Компенсация возобновлена из этой приостановленной записи (миграция 374). */
   resumed_from_id?: number | null;
+  /** «Обновление документов» компенсации (миграция 380), YYYY-MM-DD; прежний бэкенд поле не присылает. */
+  docs_updated_on?: string | null;
+  /** Справочное «Начало компенсации» раньше начала расчёта check_in (миграция 380), YYYY-MM-DD. */
+  since_on?: string | null;
 }
 
 /** Общежитие справочника (миграции 319, 377): как «Общежития» 1С. */
@@ -129,6 +133,23 @@ export interface ICompensationMonthRow extends IDormitoryStay {
   /** Период в бригаде, задевающий месяц: дни в бригаде компенсацией не оплачиваются. */
   brigade_from?: string | null;
   brigade_to?: string | null;
+  /** Файлов компенсации у сотрудника (миграция 380); прежний бэкенд поле не присылает. */
+  files_count?: number;
+}
+
+/** Файл компенсации аренды сотрудника (миграция 380): у сотрудника, а не у записи — не теряется при паузе. */
+export interface ICompensationFile {
+  id: number;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  created_at: string;
+}
+
+/** «Обновление документов» у приостановленной компенсации возобновляет её: resumed — новая запись. */
+export interface ICompensationMetaResult {
+  stay: IDormitoryStay;
+  resumed: IDormitoryStay | null;
 }
 
 /** Переселение: в общежитие (адрес) или в служебную квартиру (id) — одно из двух. */
@@ -216,6 +237,8 @@ export const DORMITORY_COMPENSATION_KEY = [...DORMITORY_STAYS_KEY, 'compensation
 export const DORMITORY_ALL_STAYS_KEY = [...DORMITORY_STAYS_KEY, 'all'] as const;
 /** «История взысканий» (миграция 378) и проверка для «Заселить» — под тем же префиксом. */
 export const DORMITORY_PENALTIES_KEY = [...DORMITORY_STAYS_KEY, 'penalties'] as const;
+/** Файлы компенсации сотрудника (миграция 380) — под тем же префиксом. */
+export const compensationFilesKey = (employeeId: number) => [...DORMITORY_STAYS_KEY, 'compensation-files', employeeId] as const;
 
 export const dormitoryService = {
   /** «Управление кадрами» → «Проживание»: общежития и квартиры, охват списка кадров. */
@@ -327,6 +350,50 @@ export const dormitoryService = {
   updateMeta: async (stayId: number, meta: { paid?: boolean; comment?: string | null }): Promise<IDormitoryStay> => {
     const res = await apiClient.patch<IApiResponse<IDormitoryStay>>(`/dormitory/stays/${stayId}/meta`, meta);
     return res.data;
+  },
+
+  /**
+   * «Компенсация аренды»: комментарий и/или «Обновление документов» (миграция 380, null — стереть). Дата документов не
+   * раньше паузы возобновляет приостановленную компенсацию — resumed; прежний бэкенд его не присылает (null).
+   */
+  updateCompensationMeta: async (
+    stayId: number,
+    meta: { comment?: string | null; docs_updated_on?: string | null },
+  ): Promise<ICompensationMetaResult> => {
+    const res = await apiClient.patch<IApiResponse<IDormitoryStay> & { resumed?: IDormitoryStay | null }>(
+      `/dormitory/stays/${stayId}/meta`,
+      meta,
+    );
+    return { stay: res.data, resumed: res.resumed ?? null };
+  },
+
+  /** Файлы компенсации сотрудника (миграция 380) — по порядку прикрепления, без ссылок. */
+  listCompensationFiles: async (employeeId: number, signal?: AbortSignal): Promise<ICompensationFile[]> => {
+    const res = await apiClient.get<IApiResponse<ICompensationFile[]>>(`/dormitory/compensation/${employeeId}/files`, { signal });
+    return res.data;
+  },
+
+  /** Ссылка на файл на 5 минут: inline — просмотр, attachment — скачивание. */
+  getCompensationFileUrl: async (employeeId: number, fileId: number, disposition: 'inline' | 'attachment'): Promise<string> => {
+    const res = await apiClient.get<IApiResponse<{ url: string }>>(
+      `/dormitory/compensation/${employeeId}/files/${fileId}/url?disposition=${disposition}`,
+    );
+    if (!res.data?.url) throw new Error('Не удалось открыть файл');
+    return res.data.url;
+  },
+
+  /** Прикрепить один файл (до 25 МБ). */
+  uploadCompensationFile: async (employeeId: number, file: File): Promise<ICompensationFile> => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await apiClient.post<IApiResponse<ICompensationFile>>(`/dormitory/compensation/${employeeId}/files`, form, {
+      timeoutMs: 180_000,
+    });
+    return res.data;
+  },
+
+  removeCompensationFile: async (employeeId: number, fileId: number): Promise<void> => {
+    await apiClient.delete(`/dormitory/compensation/${employeeId}/files/${fileId}`);
   },
 
   /** «Компенсация аренды» (миграция 374): приостановить с даты — с неё не начисляется. */

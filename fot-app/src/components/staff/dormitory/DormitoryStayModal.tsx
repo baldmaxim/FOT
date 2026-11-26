@@ -11,6 +11,7 @@ import {
   type IDormitoryStayPayload,
 } from '../../../services/dormitoryService';
 import { penaltyCandidateNote } from '../../../utils/dormitoryPenalties';
+import { uploadQueue } from '../../../utils/scheduleFileQueue';
 import {
   DORMITORY_ADDRESS_MAX_LENGTH,
   DORMITORY_STAY_DATE_LABELS,
@@ -23,6 +24,7 @@ import { DateInput } from '../../ui/DateInput';
 import { EmployeeSearchField } from '../../ui/EmployeeSearchField';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
+import { CompensationFilesField } from './CompensationFilesField';
 import { DormitorySelect } from './DormitorySelect';
 import { PenaltyWarning } from './PenaltyWarning';
 
@@ -56,12 +58,18 @@ interface IDormitoryStayModalProps {
   /** Поле «Комментарий» (вкладка «Компенсация аренды»): сохраняется частичной правкой записи. */
   withComment?: boolean;
   /**
+   * «Компенсация аренды» (миграция 380): «Начало» — справочное, если раньше начала расчёта; «Обновление документов»
+   * (вместе с комментарием — одной частичной правкой; у приостановленной возобновляет её) и блок «Файлы».
+   */
+  compensation?: boolean;
+  /**
    * «Заселить» общежития (миграция 378): в подсказке поиска — пометка взысканий, после выбора — их список. Только
    * предупреждение: сохранить можно.
    */
   penaltyCheck?: boolean;
   onClose: () => void;
-  onSaved: (stay: IDormitoryStay) => void;
+  /** resumed — «Обновление документов» возобновило приостановленную компенсацию (новая запись). */
+  onSaved: (stay: IDormitoryStay, resumed?: IDormitoryStay | null) => void;
 }
 
 const KINDS: DormitoryStayKind[] = ['dormitory', 'apartment'];
@@ -73,11 +81,13 @@ const COMMENT_MAX_LENGTH = 500;
  * при правке не меняется), дата въезда, дата выезда (пусто — живёт). Общежитие — выбором из справочника (миграция
  * 377); квартира — адрес по желанию. Сумму квартиры кадры не задают: новой сервер ставит ставку
  * «Доплата за проживание», меняет её «Зарплата». Ошибка сервера — под полями, ввод не теряется. Из «Зарплаты»
- * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника».
+ * (payroll) — только заселение в общежитие: без выбора вида, поиск и запись — «Справочника». «Компенсация аренды»
+ * (compensation, миграция 380) — ещё «Обновление документов» и «Файлы»; запись создана, а файлы не загрузились —
+ * окно остаётся, «Сохранить» дозагружает их без второй записи.
  */
 export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   stay, addresses, initialAddress, payroll, fixedKind, apartment, onMove, moveLabel = 'Переселить в другое общежитие или квартиру…',
-  extraAction, raised = false, withComment = false, penaltyCheck = false, onClose, onSaved,
+  extraAction, raised = false, withComment = false, compensation = false, penaltyCheck = false, onClose, onSaved,
 }) => {
   const errorId = useId();
   const addressId = useId();
@@ -86,10 +96,19 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
   const flatAddress = apartment ? `Кв. ${apartment.title}` : (stay?.apartment_id ? stay.address : null);
   const [kind, setKind] = useState<DormitoryStayKind>(stay?.kind ?? fixedKind ?? 'dormitory');
   const [employee, setEmployee] = useState<IDormitoryCandidate | null>(null);
-  const [checkIn, setCheckIn] = useState(stay?.check_in ?? '');
+  // Компенсация: справочное «Начало» (раньше начала расчёта, миграция 380) — то, что видно в столбце.
+  const [checkIn, setCheckIn] = useState((compensation ? stay?.since_on : null) ?? stay?.check_in ?? '');
   const [checkOut, setCheckOut] = useState(stay?.check_out ?? '');
   const [address, setAddress] = useState(stay?.address ?? initialAddress ?? '');
   const [comment, setComment] = useState(stay?.comment ?? '');
+  const [docsDate, setDocsDate] = useState(stay?.docs_updated_on ?? '');
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [filesBusy, setFilesBusy] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // «Добавить сотрудника»: запись уже создана — повтор «Сохранить» не заводит вторую (409), а дописывает комментарий,
+  // дату документов и загружает оставшиеся файлы.
+  const [created, setCreated] = useState<IDormitoryStay | null>(null);
   const isApartment = kind === 'apartment';
   // Компенсация аренды (25.11.2026) — «Начало / Окончание»; общежитие и служебная квартира — «Дата въезда / выезда».
   const dateLabels = isApartment ? 'compensation' : 'stay';
@@ -117,29 +136,68 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
     clearError();
   };
 
-  const handleSubmit = async (requestClose: () => void) => {
-    const parsed = parseDormitoryStay(
-      { checkIn, checkOut, address: flatAddress ?? address },
-      { required: !isEdit, selected: employee !== null },
-      kind,
-      dateLabels,
+  /** Файлы из очереди — сотруднику записи; загруженные уходят из очереди (повтор не задвоит). false — не все. */
+  const uploadPending = async (employeeId: number): Promise<boolean> => {
+    if (pendingFiles.length === 0) return true;
+    setPendingError(null);
+    const result = await uploadQueue(
+      pendingFiles,
+      file => dormitoryService.uploadCompensationFile(employeeId, file),
+      file => setPendingFiles(prev => prev.filter(item => item !== file)),
     );
-    if (!parsed.ok) {
-      setError({ field: parsed.field, message: parsed.message });
-      return;
+    if (result.error) setPendingError(`Запись сохранена, файлы — нет: ${result.error} «Сохранить» повторит загрузку.`);
+    return result.error === null;
+  };
+
+  const handleSubmit = async (requestClose: () => void) => {
+    let saved = created;
+    let payload: IDormitoryStayPayload | null = null;
+    if (!saved) {
+      const parsed = parseDormitoryStay(
+        { checkIn, checkOut, address: flatAddress ?? address },
+        { required: !isEdit, selected: employee !== null },
+        kind,
+        dateLabels,
+      );
+      if (!parsed.ok) {
+        setError({ field: parsed.field, message: parsed.message });
+        return;
+      }
+      payload = parsed.payload;
     }
     setSaving(true);
     setError(null);
     try {
-      let saved: IDormitoryStay;
-      if (isEdit) saved = await dormitoryService.update(stay.id, parsed.payload);
-      else if (payroll) saved = await payroll.add(employee!.id, parsed.payload);
-      else saved = await dormitoryService.add(employee!.id, kind, parsed.payload, apartment?.id ?? null);
+      if (!saved) {
+        if (isEdit) saved = await dormitoryService.update(stay.id, payload!);
+        else if (payroll) saved = await payroll.add(employee!.id, payload!);
+        else {
+          saved = await dormitoryService.add(employee!.id, kind, payload!, apartment?.id ?? null);
+          setCreated(saved);
+        }
+      }
+      let resumed: IDormitoryStay | null = null;
       const nextComment = comment.trim() || null;
-      if (withComment && nextComment !== (saved.comment ?? null)) {
+      if (compensation) {
+        const meta: { comment?: string | null; docs_updated_on?: string | null } = {};
+        if (nextComment !== (saved.comment ?? null)) meta.comment = nextComment;
+        const nextDocs = docsDate || null;
+        if (nextDocs !== (saved.docs_updated_on ?? null)) meta.docs_updated_on = nextDocs;
+        if (Object.keys(meta).length > 0) {
+          ({ stay: saved, resumed } = await dormitoryService.updateCompensationMeta(saved.id, meta));
+          if (!isEdit) setCreated(saved);
+        }
+        if (!(await uploadPending(saved.employee_id))) {
+          // Запись есть — таблица перечитывается, окно остаётся с оставшимися файлами.
+          onSaved(saved, resumed);
+          setCreated(saved);
+          setSaving(false);
+          return;
+        }
+      } else if (withComment && nextComment !== (saved.comment ?? null)) {
         saved = await dormitoryService.updateMeta(saved.id, { comment: nextComment });
       }
-      onSaved(saved);
+      onSaved(saved, resumed);
       requestClose();
     } catch (err) {
       setError({ field: null, message: err instanceof ApiError && err.message ? err.message : 'Не удалось сохранить' });
@@ -147,12 +205,17 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
     }
   };
 
+  /** Запись создана, а файлы или комментарий — нет: даты и сотрудник уже не меняются. */
+  const recordLocked = saving || created !== null;
+
   return (
     <RegistryFormModal
       title={isEdit ? (flatAddress ? 'Квартира' : DORMITORY_STAY_KIND_LABELS[kind]) : apartment ? 'Заселить в квартиру' : 'Добавить сотрудника'}
       onClose={onClose}
       onSubmit={requestClose => { void handleSubmit(requestClose); }}
-      saving={saving}
+      // Пока грузится или удаляется файл, окно не закрывается; поверх открыт просмотр — Escape закрывает только его.
+      saving={saving || filesBusy}
+      closeOnEscape={!previewOpen}
       error={error?.message ?? null}
       errorId={errorId}
       raised={payroll !== undefined || raised}
@@ -173,7 +236,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             onChange={value => { setEmployee(value); clearError(); }}
             search={payroll?.search ?? dormitoryService.searchEmployees}
             {...(penaltyCheck ? { note: penaltyCandidateNote } : {})}
-            disabled={saving}
+            disabled={recordLocked}
             invalid={error?.field === 'employee'}
           />
         )}
@@ -210,7 +273,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             value={checkIn}
             onChange={value => { setCheckIn(value); clearError(); }}
             className={dateClass('check_in')}
-            disabled={saving}
+            disabled={recordLocked}
           />
         </div>
         <div className={styles.field}>
@@ -219,10 +282,22 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             value={checkOut}
             onChange={value => { setCheckOut(value); clearError(); }}
             className={dateClass('check_out')}
-            disabled={saving}
+            disabled={recordLocked}
           />
         </div>
       </div>
+
+      {compensation && (
+        <div className={styles.field}>
+          <span className={styles.label}>Обновление документов</span>
+          <DateInput
+            value={docsDate}
+            onChange={value => { setDocsDate(value); clearError(); }}
+            className={styles.dateInput}
+            disabled={saving}
+          />
+        </div>
+      )}
 
       {flatAddress ? (
         <div className={styles.field}>
@@ -237,7 +312,7 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             onValueChange={value => { setAddress(value); clearError(); }}
             maxLength={DORMITORY_ADDRESS_MAX_LENGTH}
             autoComplete="off"
-            disabled={saving}
+            disabled={recordLocked}
             aria-invalid={invalid('address')}
             aria-describedby={error ? errorId : undefined}
             clearLabel="Очистить адрес"
@@ -270,6 +345,18 @@ export const DormitoryStayModal: FC<IDormitoryStayModalProps> = ({
             clearLabel="Очистить комментарий"
           />
         </label>
+      )}
+
+      {compensation && (
+        <CompensationFilesField
+          employeeId={stay?.employee_id ?? created?.employee_id ?? null}
+          pending={pendingFiles}
+          onPendingChange={files => { setPendingFiles(files); setPendingError(null); }}
+          pendingError={pendingError}
+          disabled={saving}
+          onBusyChange={setFilesBusy}
+          onPreviewChange={setPreviewOpen}
+        />
       )}
 
       {isEdit && onMove && (

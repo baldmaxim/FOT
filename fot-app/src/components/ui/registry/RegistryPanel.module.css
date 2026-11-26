@@ -128,7 +128,8 @@
 }
 
 @media (min-width: 769px) {
-  .search { flex: 0 1 320px; }
+  /* По ширине поля (SearchInput — 280px): кнопки справа от поиска — вплотную, без пустого места (26.11.2026). */
+  .search { flex: 0 0 auto; }
   .searchAside { flex: 0 1 auto; }
   .retry { min-height: 36px; }
   .actions { flex: 0 0 auto; margin-left: auto; }

@@ -2,6 +2,7 @@ import { useId, useState, type FC } from 'react';
 
 import { ApiError } from '../../../api/client';
 import { dormitoryService, type ICompensationMonthRow } from '../../../services/dormitoryService';
+import { closedMonthsDateError, compensationOpenFrom } from '../../../utils/compensationDates';
 import { formatDate } from '../../../utils/formatMoney';
 import { DateInput } from '../../ui/DateInput';
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
@@ -21,7 +22,8 @@ interface ICompensationPauseModalProps {
 /**
  * «Компенсация аренды» (миграция 374): «Приостановить» — с даты компенсация не начисляется (дни месяца до неё
  * считаются); «Возобновить» — с даты снова начисляется, не раньше паузы; «Завершить без возобновления» — пауза
- * становится окончанием, строка уходит из следующих месяцев. Ошибка сервера — под полем, ввод не теряется.
+ * становится окончанием, строка уходит из следующих месяцев. Обе даты — не раньше открытого периода (миграция 380:
+ * дни закрытых месяцев не меняются). Ошибка сервера — под полем, ввод не теряется.
  */
 export const CompensationPauseModal: FC<ICompensationPauseModalProps> = ({ row, action, today, onClose, onSaved }) => {
   const errorId = useId();
@@ -52,6 +54,11 @@ export const CompensationPauseModal: FC<ICompensationPauseModalProps> = ({ row, 
     }
     if (isResume && date < pausedFrom) {
       setError(`Дата возобновления — не раньше ${formatDate(pausedFrom)}`);
+      return;
+    }
+    const openFrom = compensationOpenFrom(today);
+    if (date < openFrom) {
+      setError(closedMonthsDateError(isResume ? 'возобновления' : 'приостановки', openFrom));
       return;
     }
     void save(
