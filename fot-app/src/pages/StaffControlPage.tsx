@@ -278,15 +278,19 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureR
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {/* Действие решает состояние строки (staffRowActionKind): на «Все» уволенному — «Восстановить», а не «Вернуть в табель». */}
         {onReturn && actionKind === 'return' ? (
-          <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
-            Вернуть в табель
-          </button>
+          <span className="sc-row-actions">
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} />
+            <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
+              Вернуть в табель
+            </button>
+          </span>
         ) : onRehire && actionKind === 'rehire' ? (
           <button className="sc-btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} title="Восстановить сотрудника" onClick={() => onRehire(emp)}>
             Восстановить
           </button>
         ) : onCancelDismissal && actionKind === 'cancel-dismissal' ? (
           <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} />
             <span title={`Уволится ${emp.dismissal_date}`} style={{ fontSize: 11, color: '#dc2626', whiteSpace: 'nowrap' }}>
               <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
               {emp.dismissal_date}
@@ -1285,15 +1289,19 @@ const MobileCard: FC<{
       <div className="sc-card-actions">
         {/* Как в таблице (staffRowActionKind). */}
         {onReturn && actionKind === 'return' ? (
-          <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
-            Вернуть в табель
-          </button>
+          <>
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} stopPropagation />
+            <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
+              Вернуть в табель
+            </button>
+          </>
         ) : onRehire && actionKind === 'rehire' ? (
           <button className="sc-btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onRehire(emp); }}>
             Восстановить
           </button>
         ) : onCancelDismissal && actionKind === 'cancel-dismissal' ? (
           <>
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} stopPropagation />
             <span style={{ fontSize: 12, color: '#dc2626', whiteSpace: 'nowrap' }}>
               <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
               Уволится {emp.dismissal_date}

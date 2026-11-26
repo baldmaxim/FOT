@@ -711,6 +711,8 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
   let orphanedSubordinateIds: number[] = [];
 
   const result = await withTransaction<EmployeeEncrypted | 'applied_elsewhere'>(async (client) => {
+    // Ручная метка «Неактивный» (миграция 381) снимается тем же UPDATE: уволенный — только «Уволен», а восстановленный
+    // станет «Активным».
     const updated = await client.query<EmployeeEncrypted>(
       `UPDATE employees
           SET employment_status = 'fired',
@@ -720,8 +722,6 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
               excluded_from_timesheet = true,
               excluded_from_timesheet_date = $3,
               dismissal_apply_started_at = NULL,
-              -- Ручная метка «Неактивный» (миграция 381) снимается: уволенный — только «Уволен», а восстановленный
-              -- станет «Активным».
               staff_inactive_at = NULL,
               staff_inactive_by = NULL,
               lifecycle_revision = lifecycle_revision + 1,
@@ -902,6 +902,7 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
   let restoreConflicts: IRestoreConflict[] = [];
 
   const result = await withTransaction<EmployeeEncrypted | 'applied_elsewhere'>(async (client) => {
+    // Восстановленный — «Активный» (миграция 381): метку снимает и увольнение, здесь — на случай старых строк.
     const updated = await client.query<EmployeeEncrypted>(
       `UPDATE employees
           SET employment_status = 'active',
@@ -912,7 +913,6 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
               dismissal_apply_started_at = NULL,
               excluded_from_timesheet = false,
               excluded_from_timesheet_date = NULL,
-              -- Восстановленный — «Активный» (миграция 381); метку снимает и увольнение, здесь — на случай старых строк.
               staff_inactive_at = NULL,
               staff_inactive_by = NULL,
               lifecycle_revision = lifecycle_revision + 1,

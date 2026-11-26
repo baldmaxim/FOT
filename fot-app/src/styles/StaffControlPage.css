@@ -52,6 +52,13 @@
   }
 }
 
+/* Столбец действий: иконка «в неактивные / вернуть» рядом с главной кнопкой строки («Вернуть в табель»). */
+.sc-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Окно «Перевести в неактивные» / «Вернуть в активные». */
 .sc-modal-title-icon {
   vertical-align: text-bottom;
