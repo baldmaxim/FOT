@@ -13,6 +13,8 @@ import { PAGE_PATHS } from '../config/access-control.js';
 import { PAGE_KEY_HR_PROFILES } from '../config/hr-documents.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { auditService } from '../services/audit.service.js';
+import { compensationOpenFrom } from '../services/dormitory-compensation-dates.js';
+import { updateCompensationDocs } from '../services/dormitory-compensation-pause.service.js';
 import { listCompensationMonth } from '../services/dormitory-compensation.service.js';
 import {
   loadLastPasses,
@@ -26,8 +28,10 @@ import {
   updateStayMeta,
   type IDormitoryStay,
 } from '../services/dormitory-stays.service.js';
+import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { lastDayOfMonth } from '../services/payroll/payroll-payslip.rules.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import { COMPENSATION_PAUSE_FAILURES } from './dormitory-compensation-pause.controller.js';
 import { canWriteStay, rosterEmployeeIds } from './dormitory-access.js';
 import {
   dormitoryStayAuditDetails,
@@ -114,8 +118,10 @@ const residents = async (req: AuthenticatedRequest, res: Response): Promise<void
 };
 
 /**
- * PATCH /api/dormitory/stays/:id/meta { paid?, comment? } — «Платно» (только жилец служебной квартиры) и/или
- * комментарий; остальные поля не трогаются. Без изменений — 200 без аудита.
+ * PATCH /api/dormitory/stays/:id/meta { paid?, comment?, docs_updated_on? } — «Платно» (только жилец служебной
+ * квартиры), комментарий и «Обновление документов» компенсации (миграция 380); остальные поля не трогаются. Дата
+ * документов у приостановленной компенсации — не раньше паузы — возобновляет её (новая запись — в resumed рядом с
+ * data, data — сама запись, как раньше); пауза с будущей даты снимается. Без изменений — 200 без аудита.
  */
 const updateMeta = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -125,31 +131,72 @@ const updateMeta = async (req: AuthenticatedRequest, res: Response): Promise<voi
       res.status(404).json(NOT_FOUND);
       return;
     }
-    const input = stayMetaSchema.parse(req.body ?? {});
+    const { docs_updated_on: docsDate, ...meta } = stayMetaSchema.parse(req.body ?? {});
+    if (docsDate !== undefined && current.kind !== 'apartment') {
+      res.status(400).json({ success: false, error: 'Дату обновления документов указывают только у компенсации аренды' });
+      return;
+    }
     if (!(await canWriteStay(req, current.employee_id))) {
       res.status(403).json(NO_ACCESS);
       return;
     }
-    const updated = await updateStayMeta(id, input);
-    if (updated === null) {
-      res.status(404).json(NOT_FOUND);
-      return;
+    let after: IDormitoryStay = current;
+    if (meta.paid !== undefined || meta.comment !== undefined) {
+      const updated = await updateStayMeta(id, meta);
+      if (updated === null) {
+        res.status(404).json(NOT_FOUND);
+        return;
+      }
+      if (updated === 'not_flat') {
+        res.status(400).json({ success: false, error: '«Платно» отмечают только у жильца служебной квартиры' });
+        return;
+      }
+      if (dormitoryStayChanged(updated.before, updated.after)) {
+        await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_UPDATED', {
+          entityType: 'employee_dormitory_stays',
+          entityId: String(id),
+          details: { from: dormitoryStayAuditDetails(updated.before), to: dormitoryStayAuditDetails(updated.after) },
+        });
+      }
+      after = updated.after;
     }
-    if (updated === 'not_flat') {
-      res.status(400).json({ success: false, error: '«Платно» отмечают только у жильца служебной квартиры' });
-      return;
+    let resumed: IDormitoryStay | null = null;
+    if (docsDate !== undefined) {
+      const today = moscowTodayIso();
+      const result = await updateCompensationDocs(id, docsDate, compensationOpenFrom(today), today);
+      if (typeof result === 'string') {
+        const failure = COMPENSATION_PAUSE_FAILURES[result];
+        res.status(failure.status).json({ success: false, error: failure.error });
+        return;
+      }
+      if (dormitoryStayChanged(result.before, result.after)) {
+        await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_UPDATED', {
+          entityType: 'employee_dormitory_stays',
+          entityId: String(id),
+          details: {
+            action: result.pauseCancelled ? 'docs_cancel_pause' : 'docs',
+            from: dormitoryStayAuditDetails(result.before),
+            to: dormitoryStayAuditDetails(result.after),
+          },
+        });
+      }
+      if (result.resumed) {
+        await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_ADDED', {
+          entityType: 'employee_dormitory_stays',
+          entityId: String(result.resumed.id),
+          details: { action: 'resume', reason: 'docs', ...dormitoryStayAuditDetails(result.resumed) },
+        });
+      }
+      after = result.after;
+      resumed = result.resumed;
     }
-    const { before, after } = updated;
-    if (dormitoryStayChanged(before, after)) {
-      await auditService.logFromRequest(req, req.user.id, 'DORMITORY_STAY_UPDATED', {
-        entityType: 'employee_dormitory_stays',
-        entityId: String(id),
-        details: { from: dormitoryStayAuditDetails(before), to: dormitoryStayAuditDetails(after) },
-      });
-    }
-    res.json({ success: true, data: after });
+    res.json({ success: true, data: after, resumed });
   } catch (err) {
     if (handleZodError(err, res)) return;
+    if (err instanceof DormitoryAllowanceConflictError) {
+      res.status(409).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     console.error('dormitoryResidents.updateMeta error:', err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения' });
   }

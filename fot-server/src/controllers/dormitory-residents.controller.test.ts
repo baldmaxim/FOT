@@ -23,6 +23,15 @@ vi.mock('../services/dormitory-stay-move.service.js', () => moveSvc);
 const compensationSvc = vi.hoisted(() => ({ listCompensationMonth: vi.fn() }));
 vi.mock('../services/dormitory-compensation.service.js', () => compensationSvc);
 
+// «Обновление документов» компенсации (миграция 380).
+const pauseSvc = vi.hoisted(() => ({
+  updateCompensationDocs: vi.fn(),
+  suspendCompensation: vi.fn(),
+  resumeCompensation: vi.fn(),
+  finishCompensationPause: vi.fn(),
+}));
+vi.mock('../services/dormitory-compensation-pause.service.js', () => pauseSvc);
+
 const scope = vi.hoisted(() => ({
   canWriteEmployeeInScope: vi.fn(),
   canSeeEmployeeInStaffList: vi.fn(),
@@ -181,6 +190,75 @@ describe('«Платно» и комментарий', () => {
     const missing = makeRes();
     await c.updateMeta(makeReq({ params: { id: '99' }, body: { comment: 'x' } }), missing);
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('«Обновление документов» компенсации (миграция 380)', () => {
+  const COMPENSATION = { ...STAY, id: 18, employee_id: 42, kind: 'apartment', address: null, amount: '630.00', docs_updated_on: null };
+  const PAUSED = { ...COMPENSATION, check_out: '2026-11-16', suspended: true };
+
+  it('дата не раньше паузы — компенсация возобновлена: data — запись, resumed — новая; аудит обоих', async () => {
+    today.value = '2026-11-26';
+    svc.getStay.mockResolvedValue(PAUSED);
+    const resumed = { ...COMPENSATION, id: 500, check_in: '2026-11-20', docs_updated_on: '2026-11-20', resumed_from_id: 18 };
+    pauseSvc.updateCompensationDocs.mockResolvedValue({
+      before: PAUSED, after: { ...PAUSED, docs_updated_on: '2026-11-20' }, resumed, pauseCancelled: false,
+    });
+    const res = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '18' }, body: { docs_updated_on: '2026-11-20' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(pauseSvc.updateCompensationDocs).toHaveBeenCalledWith(18, '2026-11-20', '2026-11-01', '2026-11-26');
+    expect(svc.updateStayMeta).not.toHaveBeenCalled();
+    expect(res.body).toEqual({ success: true, data: expect.objectContaining({ id: 18, docs_updated_on: '2026-11-20' }), resumed });
+    expect(audit.logFromRequest).toHaveBeenCalledWith(expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED', expect.objectContaining({
+      details: expect.objectContaining({ action: 'docs', to: expect.objectContaining({ docs_updated_on: '2026-11-20' }) }),
+    }));
+    expect(audit.logFromRequest).toHaveBeenCalledWith(expect.anything(), 'user-1', 'DORMITORY_STAY_ADDED', expect.objectContaining({
+      entityId: '500', details: expect.objectContaining({ action: 'resume', reason: 'docs' }),
+    }));
+  });
+
+  it('1–10 декабря — открыт и ноябрь: граница 01.11; комментарий и дата — обе правки', async () => {
+    today.value = '2026-12-05';
+    svc.getStay.mockResolvedValue(COMPENSATION);
+    svc.updateStayMeta.mockResolvedValue({ before: COMPENSATION, after: { ...COMPENSATION, comment: 'НЕТ обновления' } });
+    pauseSvc.updateCompensationDocs.mockResolvedValue({
+      before: COMPENSATION, after: COMPENSATION, resumed: null, pauseCancelled: false,
+    });
+    const res = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '18' }, body: { comment: 'НЕТ обновления', docs_updated_on: null } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(svc.updateStayMeta).toHaveBeenCalledWith(18, { comment: 'НЕТ обновления' });
+    expect(pauseSvc.updateCompensationDocs).toHaveBeenCalledWith(18, null, '2026-11-01', '2026-12-05');
+    expect(res.body.resumed).toBeNull();
+  });
+
+  it('у общежития — 400; неверная дата — 400; только комментарий — resumed null (прежний формат data)', async () => {
+    svc.getStay.mockResolvedValue(STAY);
+    const dormitory = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '7' }, body: { docs_updated_on: '2026-11-20' } }), dormitory);
+    expect(dormitory.statusCode).toBe(400);
+
+    svc.getStay.mockResolvedValue(COMPENSATION);
+    const bad = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '18' }, body: { docs_updated_on: '2026-02-31' } }), bad);
+    expect(bad.statusCode).toBe(400);
+    expect(pauseSvc.updateCompensationDocs).not.toHaveBeenCalled();
+
+    svc.updateStayMeta.mockResolvedValue({ before: COMPENSATION, after: { ...COMPENSATION, comment: 'x' } });
+    const comment = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '18' }, body: { comment: 'x' } }), comment);
+    expect(comment.body).toEqual({ success: true, data: expect.objectContaining({ id: 18, comment: 'x' }), resumed: null });
+  });
+
+  it('пересечение при возобновлении — 409 текстом', async () => {
+    svc.getStay.mockResolvedValue(PAUSED);
+    pauseSvc.updateCompensationDocs.mockResolvedValue('overlap');
+    const res = makeRes();
+    await c.updateMeta(makeReq({ params: { id: '18' }, body: { docs_updated_on: '2026-11-20' } }), res);
+    expect(res.statusCode).toBe(409);
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
   });
 });
 

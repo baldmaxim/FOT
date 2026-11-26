@@ -1,12 +1,14 @@
 import { Router } from 'express';
 
 import { companyApartmentsController as apartments } from '../controllers/company-apartments.controller.js';
+import { dormitoryCompensationFilesController as compensationFiles } from '../controllers/dormitory-compensation-files.controller.js';
 import { dormitoryCompensationPauseController as pause } from '../controllers/dormitory-compensation-pause.controller.js';
 import { dormitoryDirectoryController as directory } from '../controllers/dormitory-directory.controller.js';
 import { dormitoryPenaltiesController as penalties } from '../controllers/dormitory-penalties.controller.js';
 import { dormitoryResidentsController as residents } from '../controllers/dormitory-residents.controller.js';
 import { dormitoryStaysController as c } from '../controllers/dormitory-stays.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { acceptMemoFile } from '../middleware/blacklistMemoUpload.js';
 import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
@@ -39,6 +41,11 @@ router.post('/stays/:id/finish-pause', dormitoryEdit, pause.finish);
 // Вкладки «Общежитие» и «Компенсация аренды».
 router.get('/residents', dormitoryView, residents.residents);
 router.get('/compensation', dormitoryView, residents.compensation);
+// Миграция 380: файлы компенсации аренды сотрудника (📎 в таблице и блок «Файлы» в окне).
+router.get('/compensation/:employeeId/files', dormitoryView, compensationFiles.list);
+router.get('/compensation/:employeeId/files/:fileId/url', dormitoryView, compensationFiles.fileUrl);
+router.post('/compensation/:employeeId/files', dormitoryEdit, acceptMemoFile, compensationFiles.upload);
+router.delete('/compensation/:employeeId/files/:fileId', dormitoryEdit, compensationFiles.remove);
 // Вкладка «Квартира»: служебные квартиры и их жильцы.
 router.get('/apartments', dormitoryView, apartments.list);
 router.post('/apartments', dormitoryEdit, apartments.add);

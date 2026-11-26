@@ -58,8 +58,9 @@ import {
 import { addDormitory, deleteDormitory, listDormitories, updateDormitory } from './dormitory-directory.service.js';
 import { currentRateMonth, deleteRate, listRates, updateRate } from './payroll/payroll-rates.service.js';
 import {
-  finishCompensationPause, resumeCompensation, suspendCompensation, type ICompensationPauseResult,
+  finishCompensationPause, resumeCompensation, suspendCompensation, updateCompensationDocs, type ICompensationPauseResult,
 } from './dormitory-compensation-pause.service.js';
+import { CompensationClosedMonthsError } from './dormitory-compensation-dates.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../../docs/migrations/', import.meta.url));
 const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${name}`, 'utf8');
@@ -71,7 +72,7 @@ const D2 = '00000000-0000-0000-0000-0000000000d2';
 describe.skipIf(!PG_URL)('общежитие и ставка с кодом на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, company_apartments, payroll_rate_values, payroll_rates,
+      DROP TABLE IF EXISTS dormitory_compensation_files, dormitory_addresses, employee_dormitory_stays, company_apartments, payroll_rate_values, payroll_rates,
         role_page_access, access_pages, employee_dismissal_events,
         payroll_compensation_terms, payroll_dormitory_allowances, employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -268,6 +269,9 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     expect(directory.find(item => item.address === 'Общ1')).toMatchObject({ doc_date: null, doc_number: null, place_price: null });
     await expect(run(`UPDATE dormitory_addresses SET place_price = 0 WHERE address = 'Общ1'`)).rejects.toThrow(/dormitory_address_place_price/);
     await run(`DELETE FROM employee_dormitory_stays; DELETE FROM dormitory_addresses WHERE address = 'Общ1'`);
+    // «Обновление документов», справочное «Начало», файлы компенсации (380); повтор безопасен.
+    await run(migration('380_dormitory_compensation_docs_files.sql'));
+    await run(migration('380_dormitory_compensation_docs_files.sql'));
     // Общежития следующих тестов.
     await run(`INSERT INTO dormitory_addresses (address) VALUES
       ('Общежитие №2, комн. 14'), ('Общежитие №3'), ('Общежитие №4'), ('Внутри'), ('Общежитие №2'), ('Пересечение')`);
@@ -516,5 +520,62 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
     await expect(run(`UPDATE employee_dormitory_stays SET suspended = true, check_out = '2026-12-05' WHERE id = ${dorm.id}`))
       .rejects.toThrow(/employee_dormitory_stay_suspended/);
     await run(`DELETE FROM employee_dormitory_stays WHERE employee_id = 2 AND kind = 'apartment'`);
+  });
+  it('380: закрытые месяцы, справочное «Начало», «Обновление документов» возобновляет паузу', async () => {
+    const NOV = '2026-11-01';
+    const apartment = { kind: 'apartment' as const, check_out: null, address: null, amount: 630 };
+    // Новая с началом 2023 — расчёт с начала открытого периода, 2023 — справочно (Абдухалимов).
+    const added = await addStay(2, { ...apartment, check_in: '2023-04-19' }, { openFrom: NOV });
+    if (added === 'overlap') throw new Error('компенсация не добавлена');
+    expect(added).toMatchObject({ check_in: NOV, since_on: '2023-04-19', docs_updated_on: null });
+    await run(`DELETE FROM employee_dormitory_stays WHERE id = ${added.id}`);
+
+    // Запись с сентября (как Киличов Ш.): «Окончание» в феврале и 🗑 — отказ; «Начало» 2018 — справочно.
+    const comp = await addStay(2, { ...apartment, check_in: '2026-09-01' });
+    if (comp === 'overlap') throw new Error('компенсация не добавлена');
+    await expect(updateStay(comp.id, { check_in: '2018-09-01', check_out: '2026-02-19', address: null, amount: null }, { openFrom: NOV }))
+      .rejects.toThrow(CompensationClosedMonthsError);
+    await expect(deleteStay(comp.id, { openFrom: NOV })).rejects.toThrow(/поставьте «Окончание»/);
+    expect(await updateStay(comp.id, { check_in: '2018-09-01', check_out: null, address: null, amount: null }, { openFrom: NOV }))
+      .toMatchObject({ after: { check_in: '2026-09-01', since_on: '2018-09-01' } });
+    // Правка из «Зарплаты» (без openFrom) с началом раньше справочного — справочное снимается (CHECK since_on < check_in).
+    expect(await updateStay(comp.id, { check_in: '2018-01-01', check_out: null, address: null, amount: null }))
+      .toMatchObject({ after: { check_in: '2018-01-01', since_on: null } });
+    await run(`UPDATE employee_dormitory_stays SET check_in = '2026-09-01' WHERE id = ${comp.id}`);
+
+    // Пауза до открытого периода — отказ (Барабаш с 01.10); с 16.11 — можно.
+    await expect(suspendCompensation(comp.id, '2026-10-01', NOV)).rejects.toThrow(/приостановки — не раньше 01\.11\.2026/);
+    expect(await suspendCompensation(comp.id, '2026-11-16', NOV)).toMatchObject({ after: { suspended: true } });
+    // Документы обновлены раньше паузы — только дата; не раньше паузы — возобновление с этой даты, дата — у новой записи.
+    expect(await updateCompensationDocs(comp.id, '2026-11-10', NOV, '2026-11-26'))
+      .toMatchObject({ after: { docs_updated_on: '2026-11-10', suspended: true }, resumed: null, pauseCancelled: false });
+    const docs = await updateCompensationDocs(comp.id, '2026-11-20', NOV, '2026-11-26');
+    if (typeof docs === 'string') throw new Error(docs);
+    expect(docs.resumed).toMatchObject({ check_in: '2026-11-20', docs_updated_on: '2026-11-20', resumed_from_id: comp.id });
+    // Возобновление вручную переносит дату документов.
+    expect(await suspendCompensation(docs.resumed!.id, '2026-11-24', NOV)).toMatchObject({ after: { suspended: true } });
+    expect(await resumeCompensation(docs.resumed!.id, '2026-11-25', NOV))
+      .toMatchObject({ after: { check_in: '2026-11-25', docs_updated_on: '2026-11-20' } });
+    await run(`DELETE FROM employee_dormitory_stays WHERE employee_id = 2 AND kind = 'apartment'`);
+
+    // Пауза с будущей даты (Мусийчук с 27.11), документы обновлены 25.11 — пауза снята, компенсация без перерыва.
+    const future = await addStay(2, { ...apartment, check_in: '2026-09-01' });
+    if (future === 'overlap') throw new Error('компенсация не добавлена');
+    await suspendCompensation(future.id, '2026-11-27', NOV);
+    expect(await updateCompensationDocs(future.id, '2026-11-25', NOV, '2026-11-26')).toMatchObject({
+      after: { check_out: null, suspended: false, docs_updated_on: '2026-11-25' }, resumed: null, pauseCancelled: true,
+    });
+    // Возобновление в закрытом месяце — с начала открытого периода (пауза Барабаша с 01.10 до правил).
+    await run(`UPDATE employee_dormitory_stays SET check_out = '2026-10-01', suspended = true WHERE id = ${future.id}`);
+    const late = await updateCompensationDocs(future.id, '2026-10-15', NOV, '2026-11-26');
+    if (typeof late === 'string') throw new Error(late);
+    expect(late.resumed).toMatchObject({ check_in: NOV, docs_updated_on: '2026-10-15' });
+    await expect(resumeCompensation(future.id, '2026-10-20', NOV)).resolves.toBe('already_resumed');
+    await run(`DELETE FROM employee_dormitory_stays WHERE employee_id = 2 AND kind = 'apartment'`);
+
+    // CHECK: дата документов — только у компенсации, справочное начало — раньше начала расчёта.
+    const dorm = (await listStays({ employeeIds: [6] })).find(stay => stay.kind === 'dormitory')!;
+    await expect(run(`UPDATE employee_dormitory_stays SET docs_updated_on = '2026-11-01' WHERE id = ${dorm.id}`))
+      .rejects.toThrow(/employee_dormitory_stay_docs_updated/);
   });
 });

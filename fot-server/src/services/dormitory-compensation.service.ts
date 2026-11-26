@@ -24,6 +24,7 @@ import { lastDayOfMonth } from './payroll/payroll-payslip.rules.js';
 import { resolvePreliminaryAsOf } from './payroll/brigade-salary.service.js';
 import { getPreliminaryPayoutForEmployees, type PayrollCalcWithPreliminary } from './payroll/payroll-calc.service.js';
 import { lastStaysOfMonth } from './payroll/payroll-housing-month.service.js';
+import { countCompensationFiles } from './dormitory-compensation-files.service.js';
 import { listStaysOfClass, type IDormitoryStay } from './dormitory-stays.service.js';
 
 /** Порция расчёта — как у «Расчётов» и «Доплаты за месяц» (≤ 500 id). */
@@ -31,7 +32,7 @@ const CALC_CHUNK_SIZE = 500;
 
 /** Пауза и возобновление вокруг записи строки; начало — первая запись цепочки. */
 export interface ICompensationChain {
-  /** YYYY-MM-DD — начало первой записи цепочки «пауза → возобновление». */
+  /** YYYY-MM-DD — начало первой записи цепочки «пауза → возобновление»: справочное (since_on, миграция 380), иначе check_in. */
   compensation_start: string;
   /** YYYY-MM-DD — с какой даты приостановлена (последняя пауза около записи); нет — null. */
   paused_from: string | null;
@@ -51,6 +52,8 @@ export interface ICompensationMonthRow extends IDormitoryStay, ICompensationChai
   /** Период в бригаде, задевающий месяц (последний): YYYY-MM-DD; нет — null; to null — по сей день. */
   brigade_from: string | null;
   brigade_to: string | null;
+  /** Файлов компенсации у сотрудника (миграция 380). */
+  files_count: number;
 }
 
 type MoneyFields = Pick<ICompensationMonthRow, 'month_amount' | 'worked_days' | 'weekend_days'>;
@@ -68,14 +71,17 @@ export const compensationFromCalc = (calc: PayrollCalcWithPreliminary | undefine
   };
 };
 
+type ChainStay = Pick<IDormitoryStay, 'id' | 'check_in' | 'check_out' | 'suspended' | 'resumed_from_id'>
+  & Partial<Pick<IDormitoryStay, 'since_on'>>;
+
+/** «Начало компенсации» записи: справочное, если раньше начала расчёта (миграция 380). */
+const startOf = (stay: ChainStay): string => stay.since_on ?? stay.check_in;
+
 /**
  * Цепочка записи stay среди всех компенсаций сотрудника: начало — по resumed_from_id до первой записи; приостановленная
  * запись — её пауза и возобновление (если есть); возобновлённая — пауза прежней записи и своё начало.
  */
-export const compensationChainOf = (
-  stay: Pick<IDormitoryStay, 'id' | 'check_in' | 'check_out' | 'suspended' | 'resumed_from_id'>,
-  all: ReadonlyArray<Pick<IDormitoryStay, 'id' | 'check_in' | 'check_out' | 'suspended' | 'resumed_from_id'>>,
-): ICompensationChain => {
+export const compensationChainOf = (stay: ChainStay, all: ReadonlyArray<ChainStay>): ICompensationChain => {
   const byId = new Map(all.map(item => [item.id, item]));
   let first = stay;
   const seen = new Set<number>([stay.id]);
@@ -87,11 +93,11 @@ export const compensationChainOf = (
   }
   if (stay.suspended) {
     const child = all.find(item => item.resumed_from_id === stay.id);
-    return { compensation_start: first.check_in, paused_from: stay.check_out, resumed_from: child?.check_in ?? null };
+    return { compensation_start: startOf(first), paused_from: stay.check_out, resumed_from: child?.check_in ?? null };
   }
   const parent = stay.resumed_from_id !== null ? byId.get(stay.resumed_from_id) : undefined;
   return {
-    compensation_start: first.check_in,
+    compensation_start: startOf(first),
     paused_from: parent?.check_out ?? null,
     resumed_from: parent ? stay.check_in : null,
   };
@@ -213,6 +219,7 @@ export const listCompensationMonth = async (
   const placements = await loadMonthPlacements(
     [...ids, ...paused.map(stay => stay.employee_id)], monthStart, monthEnd, moscowTodayIso(),
   );
+  const files = await countCompensationFiles([...ids, ...paused.map(stay => stay.employee_id)]);
   const historyOf = (employeeId: number) => history.filter(stay => stay.employee_id === employeeId);
   const row = (stay: IDormitoryStay, money: MoneyFields): ICompensationMonthRow => {
     const placement = placements.get(stay.employee_id);
@@ -225,6 +232,7 @@ export const listCompensationMonth = async (
       ...compensationChainOf(stay, historyOf(stay.employee_id)),
       brigade_from: placement?.brigade_from ?? null,
       brigade_to: placement?.brigade_to ?? null,
+      files_count: files.get(stay.employee_id) ?? 0,
     };
   };
   return [

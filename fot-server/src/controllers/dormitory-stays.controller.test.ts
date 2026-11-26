@@ -13,6 +13,9 @@ const svc = vi.hoisted(() => ({
   addStay: vi.fn(),
   updateStay: vi.fn(),
   deleteStay: vi.fn(),
+  // Ошибки сервиса — заглушки: контроллер сверяет их instanceof до ошибки закрытых месяцев.
+  CompanyApartmentNotFoundError: class extends Error {},
+  CompensationPausedError: class extends Error {},
 }));
 vi.mock('../services/dormitory-stays.service.js', () => svc);
 
@@ -47,6 +50,7 @@ vi.mock('../services/staff-tab-access.service.js', () => grant);
 const penaltiesSvc = vi.hoisted(() => ({ penaltyMatches: vi.fn(async (..._args: unknown[]) => new Map()) }));
 vi.mock('../services/dormitory-penalties.service.js', () => penaltiesSvc);
 
+import { CompensationClosedMonthsError } from '../services/dormitory-compensation-dates.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
 import { dormitoryStaysController as c } from './dormitory-stays.controller.js';
 
@@ -171,7 +175,7 @@ describe('добавление', () => {
     expect(svc.addStay).toHaveBeenCalledWith(42, {
       kind: 'dormitory', apartment_id: null, check_in: '2026-10-01', check_out: null, address: 'Общежитие №2, комн. 14',
       amount: null,
-    });
+    }, {});
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'DORMITORY_STAY_ADDED',
       expect.objectContaining({ entityId: '7', details: expect.objectContaining({ employee_id: 42, check_in: '2026-10-01' }) }),
@@ -227,14 +231,15 @@ describe('добавление', () => {
     svc.addStay.mockResolvedValue(APARTMENT);
 
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', address: '  ' } }), makeRes());
+    // Компенсация — с границей закрытых месяцев (миграция 380).
     expect(svc.addStay).toHaveBeenLastCalledWith(42, {
       kind: 'apartment', apartment_id: null, check_in: '2026-10-01', check_out: null, address: null, amount: 630,
-    });
+    }, { openFrom: expect.stringMatching(/^\d{4}-\d{2}-01$/) });
     // Прежний клиент присылает сумму — она не пишется: сумму задаёт «Зарплата».
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', check_in: '2026-10-01', amount: 700, address: ' ул. Рабочая ' } }), makeRes());
-    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ address: 'ул. Рабочая', amount: 630 }));
+    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ address: 'ул. Рабочая', amount: 630 }), expect.anything());
     await c.add(makeReq({ body: { ...body, amount: 999 } }), makeRes());
-    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ kind: 'dormitory', amount: null }));
+    expect(svc.addStay).toHaveBeenLastCalledWith(42, expect.objectContaining({ kind: 'dormitory', amount: null }), {});
 
     for (const bad of [
       { employee_id: 42, kind: 'apartment' },
@@ -378,7 +383,9 @@ describe('правка', () => {
       body: { kind: 'dormitory', check_in: '2026-10-01', check_out: '2026-12-01', amount: 700 },
     }), res);
     expect(res.statusCode).toBe(200);
-    expect(svc.updateStay).toHaveBeenCalledWith(8, { check_in: '2026-10-01', check_out: '2026-12-01', address: null, amount: null });
+    expect(svc.updateStay).toHaveBeenCalledWith(
+      8, { check_in: '2026-10-01', check_out: '2026-12-01', address: null, amount: null }, { openFrom: expect.any(String) },
+    );
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED',
       expect.objectContaining({ details: { from: expect.objectContaining({ check_out: null }), to: expect.objectContaining({ check_out: '2026-12-01' }) } }),
@@ -409,6 +416,43 @@ describe('удаление', () => {
     await c.remove(makeReq({ params: { id: '8' } }), missing);
     expect(missing.statusCode).toBe(404);
     expect(svc.deleteStay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('закрытые месяцы компенсации (миграция 380)', () => {
+  beforeEach(() => {
+    scope.canWriteEmployeeInScope.mockResolvedValue(true);
+  });
+
+  it('компенсация: удаление и правка — с границей открытого периода; сервис отказал — 400 текстом, без аудита', async () => {
+    svc.getStay.mockResolvedValue(APARTMENT);
+    const message = 'Месяцы до 01.11.2026 закрыты — компенсация за них уже рассчитана: запись с ними не удаляют';
+    svc.deleteStay.mockRejectedValueOnce(new CompensationClosedMonthsError(message));
+    const removed = makeRes();
+    await c.remove(makeReq({ params: { id: '8' } }), removed);
+    expect(removed.statusCode).toBe(400);
+    expect(removed.body).toEqual({ success: false, error: message, code: 'COMPENSATION_CLOSED_MONTHS' });
+    expect(svc.deleteStay).toHaveBeenCalledWith(8, { openFrom: expect.stringMatching(/^\d{4}-\d{2}-01$/) });
+
+    svc.updateStay.mockRejectedValueOnce(new CompensationClosedMonthsError('«Окончание» — не раньше 01.11.2026'));
+    const updated = makeRes();
+    await c.update(makeReq({ params: { id: '8' }, body: { check_in: '2026-09-01', check_out: '2026-02-19' } }), updated);
+    // Окончание раньше начала — 400 ещё на вводе; дальше — отказ сервиса по закрытым месяцам.
+    expect(updated.statusCode).toBe(400);
+    const closed = makeRes();
+    await c.update(makeReq({ params: { id: '8' }, body: { check_in: '2018-09-01', check_out: '2026-02-19' } }), closed);
+    expect(closed.statusCode).toBe(400);
+    expect(closed.body.error).toBe('«Окончание» — не раньше 01.11.2026');
+    expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('общежитие — без границы: удаляется как раньше', async () => {
+    svc.getStay.mockResolvedValue(STAY);
+    svc.deleteStay.mockResolvedValueOnce(STAY);
+    const res = makeRes();
+    await c.remove(makeReq({ params: { id: '7' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(svc.deleteStay).toHaveBeenCalledWith(7, {});
   });
 });
 
@@ -638,7 +682,7 @@ describe('служебные квартиры (миграция 371)', () => {
     const res = makeRes();
     await c.add(makeReq({ body: { employee_id: 42, apartment_id: 2, check_in: '2026-11-19' } }), res);
     expect(res.statusCode).toBe(200);
-    expect(svc.addStay).toHaveBeenCalledWith(42, expect.objectContaining({ kind: 'dormitory', apartment_id: 2, amount: null }));
+    expect(svc.addStay).toHaveBeenCalledWith(42, expect.objectContaining({ kind: 'dormitory', apartment_id: 2, amount: null }), {});
 
     const compensation = makeRes();
     await c.add(makeReq({ body: { employee_id: 42, kind: 'apartment', apartment_id: 2, check_in: '2026-11-19' } }), compensation);
@@ -655,7 +699,7 @@ describe('служебные квартиры (миграция 371)', () => {
       const res = makeRes();
       await c.update(makeReq({ params: { id: '9' }, body }), res);
       expect(res.statusCode, JSON.stringify(body)).toBe(200);
-      expect(svc.updateStay).toHaveBeenLastCalledWith(9, expect.objectContaining({ address: 'Кв. Ляпидевского 12-58' }));
+      expect(svc.updateStay).toHaveBeenLastCalledWith(9, expect.objectContaining({ address: 'Кв. Ляпидевского 12-58' }), {});
     }
     svc.updateStay.mockClear();
     const res = makeRes();

@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
+import { CompensationClosedMonthsError, compensationOpenFrom } from '../services/dormitory-compensation-dates.js';
 import {
   finishCompensationPause,
   resumeCompensation,
@@ -16,12 +17,16 @@ import {
 } from '../services/dormitory-compensation-pause.service.js';
 import { getStay } from '../services/dormitory-stays.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { canWriteStay } from './dormitory-access.js';
 import { dormitoryStayAuditDetails, stayDateSchema } from './dormitory-stay-input.js';
 
 const NOT_FOUND = { success: false, error: 'Запись не найдена' };
 
-const FAILURES: Record<string, { status: number; error: string }> = {
+/** Начало открытого периода (миграция 380): пауза и возобновление не меняют дни закрытых месяцев. */
+const openFrom = (): string => compensationOpenFrom(moscowTodayIso());
+
+export const COMPENSATION_PAUSE_FAILURES: Record<string, { status: number; error: string }> = {
   not_found: { status: 404, error: 'Запись не найдена' },
   not_compensation: { status: 400, error: 'Приостанавливают только компенсацию аренды' },
   before_check_in: { status: 400, error: 'Дата приостановки должна быть позже начала компенсации' },
@@ -60,7 +65,7 @@ const handle = (
     }
     const result = await apply(id, req.body ?? {});
     if (typeof result === 'string') {
-      const failure = FAILURES[result];
+      const failure = COMPENSATION_PAUSE_FAILURES[result];
       res.status(failure.status).json({ success: false, error: failure.error });
       return;
     }
@@ -89,6 +94,10 @@ const handle = (
       res.status(409).json({ success: false, error: err.message, code: err.code });
       return;
     }
+    if (err instanceof CompensationClosedMonthsError) {
+      res.status(400).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     console.error(`dormitoryCompensation.${action} error:`, err);
     res.status(500).json({ success: false, error: 'Ошибка сохранения' });
   }
@@ -96,9 +105,9 @@ const handle = (
 
 export const dormitoryCompensationPauseController = {
   /** POST /api/dormitory/stays/:id/suspend { date } — приостановить с даты. */
-  suspend: handle('suspend', (id, body) => suspendCompensation(id, dateBodySchema.parse(body).date)),
-  /** POST /api/dormitory/stays/:id/resume { date } — возобновить с даты (не раньше паузы). */
-  resume: handle('resume', (id, body) => resumeCompensation(id, dateBodySchema.parse(body).date)),
+  suspend: handle('suspend', (id, body) => suspendCompensation(id, dateBodySchema.parse(body).date, openFrom())),
+  /** POST /api/dormitory/stays/:id/resume { date } — возобновить с даты (не раньше паузы и открытого периода). */
+  resume: handle('resume', (id, body) => resumeCompensation(id, dateBodySchema.parse(body).date, openFrom())),
   /** POST /api/dormitory/stays/:id/finish-pause — пауза становится окончанием. */
   finish: handle('finish', id => finishCompensationPause(id)),
 };

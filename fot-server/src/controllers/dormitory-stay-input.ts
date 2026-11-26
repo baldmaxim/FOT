@@ -106,6 +106,8 @@ export const dormitoryStayAuditDetails = (stay: IDormitoryStay) => ({
   comment: stay.comment ?? null,
   suspended: stay.suspended ?? false,
   resumed_from_id: stay.resumed_from_id ?? null,
+  docs_updated_on: stay.docs_updated_on ?? null,
+  since_on: stay.since_on ?? null,
 });
 
 /** Изменилось ли что-то в записи — без изменений аудита нет. */
@@ -116,6 +118,8 @@ export const dormitoryStayChanged = (before: IDormitoryStay, after: IDormitorySt
   || (before.paid ?? false) !== (after.paid ?? false)
   || (before.comment ?? null) !== (after.comment ?? null)
   || (before.suspended ?? false) !== (after.suspended ?? false)
+  || (before.docs_updated_on ?? null) !== (after.docs_updated_on ?? null)
+  || (before.since_on ?? null) !== (after.since_on ?? null)
 );
 
 /**
@@ -142,14 +146,18 @@ const commentSchema = z.string({ invalid_type_error: 'Неверный комм�
   .transform(value => value || null);
 
 /**
- * PATCH /stays/:id/meta — частичная правка: «Платно» и/или комментарий, остальные поля не трогаются. Ни одного
- * поля — 400.
+ * PATCH /stays/:id/meta — частичная правка: «Платно», комментарий и/или «Обновление документов» компенсации (миграция
+ * 380, null — стереть), остальные поля не трогаются. Ни одного поля — 400.
  */
 export const stayMetaSchema = z.object({
   paid: z.boolean({ invalid_type_error: 'Неверное значение «Платно»' }).optional(),
   comment: commentSchema.optional(),
-}).strict('Можно изменить только «Платно» и комментарий')
-  .refine(value => value.paid !== undefined || value.comment !== undefined, { message: 'Нечего сохранять' });
+  docs_updated_on: dateSchema('Неверная дата обновления документов').nullable().optional(),
+}).strict('Можно изменить только «Платно», комментарий и дату обновления документов')
+  .refine(
+    value => value.paid !== undefined || value.comment !== undefined || value.docs_updated_on !== undefined,
+    { message: 'Нечего сохранять' },
+  );
 
 export type IStayMetaInput = z.infer<typeof stayMetaSchema>;
 

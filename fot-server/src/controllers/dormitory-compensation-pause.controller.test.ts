@@ -58,7 +58,7 @@ describe('«Компенсация аренды»: пауза и возобно�
     pauseSvc.suspendCompensation.mockResolvedValue({ before: COMP, after: PAUSED, repeated: false });
     res = makeRes();
     await c.suspend(makeReq({ body: { date: '2026-11-16' } }), res);
-    expect(pauseSvc.suspendCompensation).toHaveBeenCalledWith(8, '2026-11-16');
+    expect(pauseSvc.suspendCompensation).toHaveBeenCalledWith(8, '2026-11-16', expect.stringMatching(/^\d{4}-\d{2}-01$/));
     expect(res.body).toEqual({ success: true, data: PAUSED });
     expect(audit.logFromRequest).toHaveBeenCalledWith(expect.anything(), 'user-1', 'DORMITORY_STAY_UPDATED', expect.objectContaining({
       entityId: '8',

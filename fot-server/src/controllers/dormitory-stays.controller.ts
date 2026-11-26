@@ -18,6 +18,7 @@ import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService } from '../services/audit.service.js';
+import { CompensationClosedMonthsError, compensationOpenFrom } from '../services/dormitory-compensation-dates.js';
 import { DormitoryNotInDirectoryError } from '../services/dormitory-directory.service.js';
 import { penaltyMatches } from '../services/dormitory-penalties.service.js';
 import { DormitoryAllowanceConflictError } from '../services/payroll/payroll-dormitory-allowances.service.js';
@@ -40,6 +41,7 @@ import {
   resolvePayrollStaffScope,
 } from '../services/payroll/payroll-registry-scope.service.js';
 import { resolvePayrollEditPredicate } from '../services/payroll/payroll-scope.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { canAddStay, canWriteStay, rosterEmployeeIds } from './dormitory-access.js';
 import {
   dormitoryStayAuditDetails,
@@ -91,8 +93,18 @@ const handleStayError = (error: unknown, res: Response): boolean => {
     res.status(400).json({ success: false, error: error.message, code: error.code });
     return true;
   }
+  if (error instanceof CompensationClosedMonthsError) {
+    res.status(400).json({ success: false, error: error.message, code: error.code });
+    return true;
+  }
   return false;
 };
+
+/**
+ * Закрытые месяцы компенсации аренды (миграция 380, dormitory-compensation-dates.ts): вкладка кадров не меняет дни
+ * компенсации в месяцах до начала открытого периода; общежитий и служебных квартир правило не касается.
+ */
+const closedMonthsOption = (kind: string) => (kind === 'apartment' ? { openFrom: compensationOpenFrom(moscowTodayIso()) } : {});
 
 const handleZodError = (error: unknown, res: Response): boolean => {
   if (error instanceof z.ZodError) {
@@ -221,7 +233,7 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
       }
       input.amount = rate;
     }
-    const stay = await addStay(employeeId, input);
+    const stay = await addStay(employeeId, input, closedMonthsOption(kind));
     if (stay === 'overlap') {
       res.status(409).json(OVERLAP);
       return;
@@ -241,7 +253,8 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
 
 /**
  * PATCH /api/dormitory/stays/:id { check_in, check_out?, address? } — даты и адрес; сотрудник, вид и сумма квартиры
- * не меняются (сумму правит «Зарплата»).
+ * не меняются (сумму правит «Зарплата»). Компенсация аренды: дни закрытых месяцев не меняются (400), «Начало» раньше
+ * начала расчёта — справочное (миграция 380).
  */
 const update = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -275,7 +288,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(403).json(NO_ACCESS);
       return;
     }
-    const updated = await updateStay(id, input);
+    const updated = await updateStay(id, input, closedMonthsOption(current.kind));
     if (updated === null) {
       res.status(404).json(NOT_FOUND);
       return;
@@ -300,7 +313,10 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** DELETE /api/dormitory/stays/:id — удалить проживание (ошибочную запись). */
+/**
+ * DELETE /api/dormitory/stays/:id — удалить проживание (ошибочную запись). Компенсацию с днями в закрытых месяцах не
+ * удаляют — 400 (её заканчивают «Окончанием»).
+ */
 const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const id = parseId(req);
@@ -313,7 +329,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(403).json(NO_ACCESS);
       return;
     }
-    const deleted = await deleteStay(id);
+    const deleted = await deleteStay(id, closedMonthsOption(current.kind));
     if (!deleted) {
       res.status(404).json(NOT_FOUND);
       return;
@@ -325,6 +341,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     });
     res.json({ success: true, data: deleted });
   } catch (err) {
+    if (handleStayError(err, res)) return;
     console.error('dormitory.remove error:', err);
     res.status(500).json({ success: false, error: 'Ошибка удаления' });
   }

@@ -65,7 +65,7 @@ const PAYROLL_SCOPE = { contractorRootId: CONTRACTORS, departmentIds: null };
 describe.skipIf(!PG_URL)('служебные квартиры «Проживания» (миграция 371) на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS dormitory_addresses, employee_dormitory_stays, company_apartments,
+      DROP TABLE IF EXISTS dormitory_compensation_files, dormitory_addresses, employee_dormitory_stays, company_apartments,
         role_page_access, access_pages, payroll_compensation_terms, payroll_dormitory_allowances,
         employees, positions, org_departments CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
@@ -130,8 +130,9 @@ describe.skipIf(!PG_URL)('служебные квартиры «Проживан
     await run(migration('371_company_apartments.sql'));
     await run(`UPDATE company_apartments SET rooms = 4 WHERE address = 'Ляпидевского 12-58'`);
     await run(migration('371_company_apartments.sql'));
-    // Пауза компенсации (374): правка дат пишет её столбец.
+    // Пауза компенсации (374): правка дат пишет её столбец; справочное «Начало» (380) — тоже.
     await run(migration('374_dormitory_stay_pause.sql'));
+    await run(migration('380_dormitory_compensation_docs_files.sql'));
 
     expect(await listApartments()).toEqual([
       { id: expect.any(Number), address: '3-й Митинский пер. 5-201', note: 'РФ \\ ВНЖ', rooms: 2, places: 3,

@@ -163,7 +163,7 @@ const auditCount = async (action: string) =>
 describe.skipIf(!PG_URL)('«Доплата за общежитие» на PostgreSQL', () => {
   beforeAll(async () => {
     await run(`
-      DROP TABLE IF EXISTS payroll_dormitory_allowances, employee_dormitory_stays, company_apartments, payroll_compensation_stops,
+      DROP TABLE IF EXISTS dormitory_compensation_files, payroll_dormitory_allowances, employee_dormitory_stays, company_apartments, payroll_compensation_stops,
         payroll_switches, timesheet_version_payroll_basis,
         payroll_one_time_supplements, payroll_paid_amounts, payroll_planned_supplements, payroll_settings,
         payroll_item_types, payroll_rate_values, payroll_rates, payroll_compensation_terms, payroll_employee_deductions,
@@ -246,8 +246,9 @@ describe.skipIf(!PG_URL)('«Доплата за общежитие» на Postgr
     for (const name of [
       '313_payroll_rate_code.sql', '314_employee_dormitory_stays.sql', '315_payroll_dictionary_registries.sql',
       '319_dormitory_addresses.sql', '320_dormitory_stays_apartment.sql',
-      // Служебные квартиры: сервис проживаний пишет и читает её столбцы; пауза компенсации — тоже (374).
-      '371_company_apartments.sql', '374_dormitory_stay_pause.sql',
+      // Служебные квартиры: сервис проживаний пишет и читает её столбцы; пауза компенсации — тоже (374), справочное
+      // «Начало» — 380.
+      '371_company_apartments.sql', '374_dormitory_stay_pause.sql', '380_dormitory_compensation_docs_files.sql',
     ]) {
       await run(migration(name));
     }

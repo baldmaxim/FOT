@@ -21,6 +21,13 @@ import { getContractorRootId } from '../config/contractor.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql } from '../utils/fio-search.utils.js';
+import {
+  assertClosedMonthsKept,
+  closedDaysOf,
+  closedMonthsMessage,
+  CompensationClosedMonthsError,
+  resolveCompensationStart,
+} from './dormitory-compensation-dates.js';
 import { effectiveDepartmentSql } from './employees-export.service.js';
 import { DormitoryNotInDirectoryError, resolveDormitoryName } from './dormitory-directory.service.js';
 import { assertApartmentWithoutDormitoryAllowance } from './payroll/payroll-dormitory-allowances.service.js';
@@ -68,6 +75,10 @@ export interface IDormitoryStay {
   suspended: boolean;
   /** Компенсация возобновлена из этой приостановленной записи (миграция 374); нет — null. */
   resumed_from_id: number | null;
+  /** «Обновление документов» компенсации (миграция 380), YYYY-MM-DD; нет — null. */
+  docs_updated_on: string | null;
+  /** Справочное «Начало компенсации» раньше начала расчёта check_in (миграция 380), YYYY-MM-DD; нет — null. */
+  since_on: string | null;
 }
 
 /**
@@ -138,7 +149,10 @@ const STAY_SELECT = `
          e.country,
          -- Колонки миграции 374 — через to_jsonb: бэкенд читает записи и до неё.
          COALESCE((to_jsonb(s) ->> 'suspended')::boolean, false) AS suspended,
-         (to_jsonb(s) ->> 'resumed_from_id')::int AS resumed_from_id
+         (to_jsonb(s) ->> 'resumed_from_id')::int AS resumed_from_id,
+         -- Колонки миграции 380 (to_jsonb отдаёт дату строкой YYYY-MM-DD).
+         to_jsonb(s) ->> 'docs_updated_on' AS docs_updated_on,
+         to_jsonb(s) ->> 'since_on' AS since_on
     FROM employee_dormitory_stays s
     JOIN employees e ON e.id = s.employee_id
     LEFT JOIN org_departments d ON d.id = e.org_department_id
@@ -320,6 +334,26 @@ export const openPauseOf = async (client: PoolClient, employeeId: number): Promi
   )).rows[0]?.paused_from ?? null
 );
 
+/**
+ * Закрытые месяцы компенсации (dormitory-compensation-dates.ts): openFrom — начало открытого периода; передаёт только
+ * вкладка кадров, «Доплата → Квартира» «Зарплаты» правит без ограничений.
+ */
+export interface IClosedMonthsOption {
+  openFrom?: string | null;
+}
+
+/** Даты компенсации после правила «Начала»: дни закрытых месяцев прежние, окончание позже начала расчёта. */
+const assertCompensationDates = (
+  before: { check_in: string; check_out: string | null } | null,
+  after: { check_in: string; check_out: string | null },
+  openFrom: string,
+): void => {
+  if (after.check_out !== null && after.check_out <= after.check_in) {
+    throw new CompensationClosedMonthsError(closedMonthsMessage('check_out', openFrom));
+  }
+  assertClosedMonthsKept(before, after, openFrom);
+};
+
 /** Одно название без учёта регистра и пробелов по краям. */
 const sameName = (a: string | null, b: string | null): boolean => (
   (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase()
@@ -343,13 +377,21 @@ export class CompanyApartmentNotFoundError extends Error {
 export const addStay = async (
   employeeId: number,
   input: IDormitoryStayInput,
+  options: IClosedMonthsOption = {},
 ): Promise<IDormitoryStay | 'overlap'> => {
   try {
     return await withTransaction(async client => {
       await lockPayrollEmployee(client, employeeId);
+      let since: string | null = null;
       if (input.kind === 'apartment') {
         const pausedFrom = await openPauseOf(client, employeeId);
         if (pausedFrom !== null) throw new CompensationPausedError(pausedFrom);
+        if (options.openFrom) {
+          const start = resolveCompensationStart(input.check_in, options.openFrom, null);
+          input = { ...input, check_in: start.check_in };
+          since = start.since_on;
+          assertCompensationDates(null, input, options.openFrom);
+        }
       }
       let address = input.address;
       if (input.apartment_id) {
@@ -364,9 +406,9 @@ export const addStay = async (
         if (address === null) throw new DormitoryNotInDirectoryError();
       }
       const row = (await client.query<{ id: number }>(
-        `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount, apartment_id)
-         VALUES ($1, $2, $3::date, $4::date, $5, $6, $7) RETURNING id`,
-        [employeeId, input.kind, input.check_in, input.check_out, address, input.amount, input.apartment_id ?? null],
+        `INSERT INTO employee_dormitory_stays (employee_id, kind, check_in, check_out, address, amount, apartment_id, since_on)
+         VALUES ($1, $2, $3::date, $4::date, $5, $6, $7, $8::date) RETURNING id`,
+        [employeeId, input.kind, input.check_in, input.check_out, address, input.amount, input.apartment_id ?? null, since],
       )).rows[0];
       await afterWrite(client, { employee_id: employeeId, ...input, address }, null);
       const stay = await readStay(client, row.id, false);
@@ -390,6 +432,7 @@ export const addStay = async (
 export const updateStay = async (
   id: number,
   input: IDormitoryStayFields,
+  options: IClosedMonthsOption = {},
 ): Promise<{ before: IDormitoryStay; after: IDormitoryStay } | 'overlap' | null> => {
   try {
     return await withTransaction(async client => {
@@ -399,6 +442,15 @@ export const updateStay = async (
       await lockPayrollEmployee(client, current.employee_id);
       const before = await readStay(client, id, true);
       if (!before) return null;
+      // Справочное «Начало» (миграция 380): во вкладке кадров — по правилам закрытых месяцев; из «Зарплаты» (без
+      // openFrom) — прежнее, пока оно раньше нового начала расчёта (CHECK employee_dormitory_stay_since).
+      let since: { set: boolean; value: string | null } = { set: false, value: null };
+      if (before.kind === 'apartment' && options.openFrom) {
+        const start = resolveCompensationStart(input.check_in, options.openFrom, before);
+        input = { ...input, check_in: start.check_in };
+        since = { set: true, value: start.since_on };
+        assertCompensationDates(before, input, options.openFrom);
+      }
       let address = input.address;
       if (before.kind === 'dormitory' && before.apartment_id === null) {
         const resolved = await resolveDormitoryName(client, input.address);
@@ -413,9 +465,10 @@ export const updateStay = async (
                 amount = COALESCE($5, amount),
                 -- Снят выезд — паузы больше нет (CHECK employee_dormitory_stay_suspended, миграция 374).
                 suspended = CASE WHEN $3::date IS NULL THEN false ELSE suspended END,
+                since_on = CASE WHEN $6::boolean THEN $7::date WHEN since_on < $2::date THEN since_on END,
                 updated_at = now()
           WHERE id = $1`,
-        [id, input.check_in, input.check_out, address, input.amount],
+        [id, input.check_in, input.check_out, address, input.amount, since.set, since.value],
       );
       await afterWrite(
         client,
@@ -454,11 +507,17 @@ export const updateStayMeta = async (
     return after ? { before, after } : null;
   });
 
-/** Удалить проживание (адрес в подсказках остаётся); его нет — null. */
-export const deleteStay = async (id: number): Promise<IDormitoryStay | null> =>
+/**
+ * Удалить проживание (адрес в подсказках остаётся); его нет — null. С openFrom (вкладка кадров) компенсацию с днями в
+ * закрытых месяцах не удаляют — CompensationClosedMonthsError: её заканчивают «Окончанием».
+ */
+export const deleteStay = async (id: number, options: IClosedMonthsOption = {}): Promise<IDormitoryStay | null> =>
   withTransaction(async client => {
     const before = await readStay(client, id, true);
     if (!before) return null;
+    if (before.kind === 'apartment' && options.openFrom && closedDaysOf(before, options.openFrom) !== null) {
+      throw new CompensationClosedMonthsError(closedMonthsMessage('delete', options.openFrom));
+    }
     await client.query(`DELETE FROM employee_dormitory_stays WHERE id = $1`, [id]);
     return before;
   });

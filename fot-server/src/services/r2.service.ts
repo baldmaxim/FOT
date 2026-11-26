@@ -136,6 +136,10 @@ export const r2Service = {
   generateWorkScheduleKey: (scheduleId: string, ext: string): string =>
     `work-schedules/${scheduleId}/${randomUUID()}${ext || '.bin'}`,
 
+  /** Файл компенсации аренды сотрудника (миграция 380). */
+  generateCompensationFileKey: (employeeId: number, ext: string): string =>
+    `dormitory-compensation/${employeeId}/${randomUUID()}${ext || '.bin'}`,
+
   generateUploadUrl: async (key: string, contentType: string): Promise<{ url: string; headers: Record<string, string> }> => {
     const { client, bucket, kmsKeyId } = await getR2();
     if (!client) throw new Error('R2 не настроен');
