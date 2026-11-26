@@ -67,8 +67,8 @@ const sameAddress = (a: string | null, b: string): boolean => (a ?? '').trim().t
  * Начальник участка, Комментарий; ширина столбцов — как в Excel. «Архив» (24.11.2026, было «История» — все
  * закончившиеся) — выехавшие в выбранном месяце, с комментарием. «История взысканий» (миграция 378) — отдельный список
  * и «Чёрный список» пропусков. «Справочник» — справочник общежитий (миграция 377): при заселении и переселении
- * общежитие выбирают из него. С правом правки — «Заселить» (с комментарием и предупреждением о взысканиях), ✎ (даты,
- * выезд, комментарий, «Переселить в другое общежитие…»), 🗑 — ошибочная запись. Уволенные подсвечены, галочка
+ * общежитие выбирают из него. С правом правки — «Заселить» (с комментарием и предупреждением о взысканиях), клик по
+ * строке и ✎ (даты, выезд, комментарий, «Переселить в другое общежитие…»), 🗑 — ошибочная запись. Уволенные подсвечены, галочка
  * «Уволенные» в фильтре «Сотрудника» их скрывает. Режим, общежитие, поиск и фильтры переживают уход в карточку.
  */
 export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
@@ -205,6 +205,8 @@ export const DormitoryResidentsPanel: FC<IDormitoryResidentsPanelProps> = ({
           onAdd={canEdit && !archive ? () => setEditor({ mode: 'add' }) : undefined}
           addLabel="Заселить"
           onEdit={canEdit && !archive ? resident => setEditor({ mode: 'edit', stay: resident }) : undefined}
+          // Клик по строке — то же окно, что ✎ (26.11.2026, как «Компенсация аренды»).
+          onRowClick={canEdit && !archive ? resident => setEditor({ mode: 'edit', stay: resident }) : undefined}
           onDelete={canEdit && !archive ? resident => { void remove(resident); } : undefined}
           busyKey={busyId}
           rowTone={resident => dismissedTone(resident, today)}
