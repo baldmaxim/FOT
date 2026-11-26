@@ -23,6 +23,8 @@ interface UserFromApi {
   two_factor_enabled: boolean;
   /** Сотрудник уволен — вход на портал закрыт. */
   is_dismissed?: boolean;
+  /** Сотрудник неактивен («Декрет»/«Архив» или ручная метка, миграция 381) — вход закрыт. */
+  is_inactive?: boolean;
   approved_at: string | null;
   created_at: string;
 }

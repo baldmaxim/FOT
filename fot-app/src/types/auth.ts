@@ -122,6 +122,8 @@ export interface UserProfile {
   staff_tab_role_edit?: Record<StaffTab, boolean>;
   /** Может ставить галочки «Проживание»/«Удержания» в назначениях: правка вкладки по роли + вся организация. */
   can_grant_staff_tabs?: Record<StaffTab, boolean>;
+  /** Кнопки «Перевести в неактивные» / «Вернуть в активные» (миграция 381): флаг учётки, роль его не даёт. */
+  can_manage_staff_inactive?: boolean;
   /** Назначен ответственным за согласование выходных — доступ к «Согласованиям» без /timesheet-hr. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;

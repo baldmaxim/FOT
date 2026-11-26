@@ -59,7 +59,13 @@ import {
 } from '../services/assignable-roles.service.js';
 import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
 import { AccountEmailError, changeAccountEmail } from '../services/account-email.service.js';
-import { isDismissedEmploymentStatus } from '../services/account-status.service.js';
+import {
+  DISMISSED_ACCOUNT_CODE,
+  INACTIVE_ACCOUNT_CODE,
+  resolveEmploymentBlock,
+  toEmploymentAccessState,
+} from '../services/account-status.service.js';
+import { loadAutoInactiveDepartmentIds, staffInactiveSql } from '../services/employee-inactive.service.js';
 import { getContractorRootId } from '../config/contractor.js';
 
 /**
@@ -605,13 +611,16 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   listParams.push(offset);
   const offsetIdx = listParams.length;
 
-  // employment_status — подзапросом, без JOIN: WHERE/поиск/roleCounts остаются на одной user_profiles.
-  type PaginatedUserRow = UserProfile & { total_count: number; employment_status: string | null };
+  // employment_status и неактивность (миграция 381) — подзапросами, без JOIN: WHERE/поиск/roleCounts остаются на
+  // одной user_profiles.
+  type PaginatedUserRow = UserProfile & { total_count: number; employment_status: string | null; staff_inactive: boolean | null };
+  const staffInactiveColumn = staffInactiveSql('e', listParams, await loadAutoInactiveDepartmentIds());
   let rows: PaginatedUserRow[];
   try {
     rows = await query<PaginatedUserRow>(
       `SELECT up.*, count(*) OVER ()::int AS total_count,
-              (SELECT e.employment_status FROM employees e WHERE e.id = up.employee_id) AS employment_status
+              (SELECT e.employment_status FROM employees e WHERE e.id = up.employee_id) AS employment_status,
+              (SELECT ${staffInactiveColumn} FROM employees e WHERE e.id = up.employee_id) AS staff_inactive
          FROM user_profiles up
          ${listWhereSql}
         ORDER BY up.created_at DESC
@@ -653,6 +662,11 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   const data = usersSlice.map((u: PaginatedUserRow) => {
     const assignedDepartmentIds = (assignedDepartmentMap.get(u.id) || []);
     const authInfo = authEmailMap[u.id];
+    const accessBlock = resolveEmploymentBlock(toEmploymentAccessState({
+      employment_status: u.employment_status,
+      staff_inactive: u.staff_inactive,
+      login_when_staff_inactive: u.login_when_staff_inactive ?? false,
+    }));
     return {
       id: u.id,
       email: authInfo?.email || '',
@@ -669,7 +683,8 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
       is_approved: u.is_approved,
       two_factor_enabled: u.two_factor_enabled,
       // Вход закрыт по тому же правилу, что в login/authenticate (account-status.service).
-      is_dismissed: isDismissedEmploymentStatus(u.employment_status),
+      is_dismissed: accessBlock?.code === DISMISSED_ACCOUNT_CODE,
+      is_inactive: accessBlock?.code === INACTIVE_ACCOUNT_CODE,
       approved_at: u.approved_at,
       created_at: u.created_at,
     };

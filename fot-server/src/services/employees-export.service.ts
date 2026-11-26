@@ -7,7 +7,7 @@
  */
 import { query } from '../config/postgres.js';
 import { CONTRACTOR_ROOT_NAME } from '../config/contractor.js';
-import { isInMaternityDepartment, normalizeDepartmentName } from '../utils/employee-sign.js';
+import { findAutoInactiveDepartmentName, normalizeDepartmentName, type EmployeeSign } from '../utils/employee-sign.js';
 import type { IEmployeeScopeFilter } from './employee-scope-filter.service.js';
 
 /** Предел строк: защита от случайной выгрузки на сотни тысяч человек. */
@@ -36,6 +36,8 @@ export interface IExportEmployeeRow {
   position_name: string | null;
   /** Уволенный — отдел до увольнения, иначе текущий. */
   effective_department_id: string | null;
+  /** Ручная метка «Неактивный» (миграция 381). */
+  staff_inactive_at: string | Date | null;
   /**
    * Попал в выгрузку через отдел скоупа (а не только как прямой подчинённый).
    * Единственный источник истины — SQL; сборка разделов его не пересчитывает.
@@ -52,7 +54,7 @@ export interface IExportDepartmentRow {
 
 export type ExportSectionKey = 'sm' | 'su10' | 'brigades' | 'contractors' | 'other';
 
-export type ExportSign = 'Работает' | 'Уволен' | 'Декрет';
+export type ExportSign = EmployeeSign;
 
 export interface IExportFlatRow {
   employeeId: number;
@@ -184,6 +186,7 @@ export async function loadExportEmployees(
               to_char(e.birth_date, 'YYYY-MM-DD') AS birth_date,
               to_char(e.hire_date, 'YYYY-MM-DD') AS hire_date,
               p.name AS position_name,
+              e.staff_inactive_at,
               ${effectiveDepartmentSql('e')} AS effective_department_id
          FROM employees e
          LEFT JOIN positions p ON p.id = e.position_id
@@ -194,7 +197,7 @@ export async function loadExportEmployees(
           )
      )
      SELECT b.id, b.full_name, b.employment_status, b.birth_date, b.hire_date,
-            b.position_name, b.effective_department_id,
+            b.position_name, b.effective_department_id, b.staff_inactive_at,
             ${inDepartmentScope} AS in_department_scope
        FROM base b
       WHERE ${scopeCondition}
@@ -248,7 +251,8 @@ export interface IDeptPlacement {
   /** Компания по верхнему узлу: бригады СУ-10/СМ здесь остаются в su10/sm. */
   company: ExportSectionKey;
   path: string;
-  isMaternity: boolean;
+  /** Отдел в ветке «Декрет»/«Архив» — сотрудник неактивен (миграция 381). */
+  isAutoInactive: boolean;
 }
 
 /** Разделы, которые можно выбрать фильтром «Управления кадрами» («Прочие» — только во «Все»). */
@@ -306,9 +310,9 @@ export function createDepartmentPlacer(departments: IExportDepartmentRow[]): {
       .reverse()
       .map(dept => dept.name || '(без названия)')
       .join(' / ');
-    const isMaternity = isInMaternityDepartment(deptId, byId);
+    const isAutoInactive = findAutoInactiveDepartmentName(deptId, byId) !== null;
 
-    const placement = { section, company: topSection, path, isMaternity };
+    const placement = { section, company: topSection, path, isAutoInactive };
     placementCache.set(deptId, placement);
     return placement;
   };
@@ -328,10 +332,10 @@ export function placeEmployee(
   const known = effectiveDepartmentId !== null && placer.byId.has(effectiveDepartmentId);
   const placement: IDeptPlacement = known
     ? placer.place(effectiveDepartmentId)
-    : { section: 'other', company: 'other', path: '', isMaternity: false };
+    : { section: 'other', company: 'other', path: '', isAutoInactive: false };
   return inDepartmentScope
     ? placement
-    : { section: 'other', company: 'other', path: '', isMaternity: placement.isMaternity };
+    : { section: 'other', company: 'other', path: '', isAutoInactive: placement.isAutoInactive };
 }
 
 /** Отделы (включая неактивные), чей раздел — section. */
@@ -371,9 +375,10 @@ export function buildExportSections({
   for (const employee of employees) {
     const visible = placeEmployee(placer, employee.effective_department_id, employee.in_department_scope);
 
+    // Как resolveEmployeeSign: уволен → «Уволен»; ручная метка или «Декрет»/«Архив» → «Неактивен».
     const sign: ExportSign = employee.employment_status === 'fired'
       ? 'Уволен'
-      : visible.isMaternity ? 'Декрет' : 'Работает';
+      : employee.staff_inactive_at || visible.isAutoInactive ? 'Неактивен' : 'Работает';
 
     const row: IExportFlatRow = {
       employeeId: employee.id,

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
-import type { StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
+import type { StaffApiStatus, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { useStaffScreenTree } from './useStructure';
 import {
   EMPTY_EMPLOYEE_COUNTS,
@@ -18,6 +18,7 @@ import {
 } from '../utils/staffInfiniteList';
 import { shouldLoadMore } from '../utils/staffLoadMore';
 import { STAFF_MONTH_MOVEMENT_QUERY_KEY } from './useStaffMonthMovement';
+import { STAFF_CATEGORY_COUNTS_QUERY_KEY } from './useStaffCategoryCounts';
 
 /** Порция «Текущих сотрудников»: догружается при прокрутке к концу списка. */
 export const STAFF_CHUNK_SIZE = 500;
@@ -31,7 +32,7 @@ interface IUseStaffDataParams {
   scheduleId?: string;
   /** Раздел (su10 | sm | contractors | all). */
   section?: string;
-  status?: 'active' | 'fired' | 'excluded';
+  status?: StaffApiStatus;
   sort: StaffSortKey;
   dir: StaffSortDir;
   period?: StaffPeriod;
@@ -119,6 +120,8 @@ export const useStaffData = (params: IUseStaffDataParams) => {
       queryClient.invalidateQueries({ queryKey: employeeCountsQueryKey(false) }),
       // Приём, увольнение, восстановление меняют чипы «с начала месяца».
       queryClient.invalidateQueries({ queryKey: STAFF_MONTH_MOVEMENT_QUERY_KEY }),
+      // Приём, увольнение, перевод в неактивные меняют разбивку ИТР / Рабочие / Остальные.
+      queryClient.invalidateQueries({ queryKey: STAFF_CATEGORY_COUNTS_QUERY_KEY }),
     ]);
   }, [employeesQueryKey, queryClient]);
 

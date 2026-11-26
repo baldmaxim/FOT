@@ -2,13 +2,12 @@
  * Серверная сортировка «Текущих сотрудников» по столбцам таблицы и курсор (ключ, id).
  *
  * Ключ сортировки — текстовое выражение над строкой employees, собираемое на КАЖДЫЙ запрос:
- * график зависит от «сегодня» по Москве, признак — от id отделов «Декрет», объект — от
+ * график зависит от «сегодня» по Москве, признак — от id отделов «Декрет»/«Архив», объект — от
  * опубликованного поколения снимка, участок — от индекса начальников участка запроса (ctx).
  * Пустые значения (NULL) всегда в конце, при любом направлении; тай-брейк — id в том же направлении.
  */
-import { getAllDepartmentsTree } from '../services/skud-shared.service.js';
 import { loadActiveSnapshotRun } from '../services/employee-main-object-snapshot.service.js';
-import { buildSignDepartmentIndex, isInMaternityDepartment } from '../utils/employee-sign.js';
+import { loadAutoInactiveDepartmentIds, staffInactiveSql } from '../services/employee-inactive.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { buildStaffSiteKeySql, type IStaffSqlContext } from '../services/staff-site.service.js';
 
@@ -124,12 +123,10 @@ export async function buildStaffSortKeySql(key: StaffSortKey, params: unknown[],
     case 'comment':
       return `(SELECT ${nullIfBlank('c.comment')} FROM employee_staff_comments c WHERE c.employee_id = employees.id)`;
     case 'sign': {
-      // Как resolveEmployeeSign: уволен → «Уволен»; отдел внутри «Декрет» → «Декрет»; иначе «Работает».
-      const deptById = buildSignDepartmentIndex(await getAllDepartmentsTree());
-      const maternityIds = [...deptById.keys()].filter(id => isInMaternityDepartment(id, deptById));
-      params.push(maternityIds);
+      // Как resolveEmployeeSign: уволен → «Уволен»; ручная метка или «Декрет»/«Архив» → «Неактивен»; иначе «Работает».
+      const inactiveSql = staffInactiveSql('employees', params, await loadAutoInactiveDepartmentIds());
       return `(CASE WHEN employees.employment_status = 'fired' THEN 'Уволен'
-                    WHEN employees.org_department_id = ANY($${params.length}::uuid[]) THEN 'Декрет'
+                    WHEN ${inactiveSql} THEN 'Неактивен'
                     ELSE 'Работает' END)`;
     }
   }

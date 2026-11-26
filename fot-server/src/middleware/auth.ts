@@ -11,10 +11,12 @@ import { canToggleTimesheetLock } from '../utils/timesheet-lock-toggle.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 import { queryOne } from '../config/postgres.js';
 import {
-  DISMISSED_ACCOUNT_CODE,
-  DISMISSED_ACCOUNT_ERROR,
-  isDismissedEmploymentStatus,
+  employmentAccessColumnsSql,
+  resolveEmploymentBlock,
+  toEmploymentAccessState,
+  type IEmploymentAccessRow,
 } from '../services/account-status.service.js';
+import { loadAutoInactiveDepartmentIds } from '../services/employee-inactive.service.js';
 
 export const authenticate = async (
   req: AuthenticatedRequest,
@@ -46,35 +48,41 @@ export const authenticate = async (
     // Старые JWT без поля (выпущенные до миграции 095) приходят как undefined →
     // нормализуются в 0, fresh.token_version тоже 0 (DEFAULT) → совпадают.
     const decodedVersion = Number.isFinite(decoded.token_version) ? decoded.token_version : 0;
-    // employment_status и почту тянем тем же запросом: отдельного похода в БД не появляется.
+    // Статус сотрудника (увольнение, неактивность — миграция 381) и почту тянем тем же запросом:
+    // отдельного похода в БД не появляется. Список отделов «Декрет»/«Архив» — из кэша дерева отделов.
     // LEFT JOIN — профиль без employee_id (подрядчики, сервисные) даёт NULL и проходит.
     // Почта — из app_auth.users, а не из токена: админ мог сменить её, а access-токен
     // живёт 7 дней (сессии при смене почты не рвём).
-    const fresh = await queryOne<{ token_version: number; employment_status: string | null; email: string | null }>(
-      `SELECT up.token_version, e.employment_status, au.email
+    const params: unknown[] = [decoded.sub];
+    const accessColumns = employmentAccessColumnsSql(params, await loadAutoInactiveDepartmentIds());
+    const fresh = await queryOne<IEmploymentAccessRow & { token_version: number; email: string | null }>(
+      `SELECT up.token_version, ${accessColumns}, au.email
          FROM user_profiles up
          LEFT JOIN employees e ON e.id = up.employee_id
          LEFT JOIN app_auth.users au ON au.id = up.id
         WHERE up.id = $1::uuid`,
-      [decoded.sub],
+      params,
     );
     if (!fresh) {
       res.status(401).json({ success: false, error: 'Profile not found' });
       return;
     }
+    // Уволенный и неактивный на портал не допускаются. 403, а не 401: клиент на этот код сбрасывает
+    // сессию и показывает причину на форме входа, а 401 лишь пробует refresh.
+    // Проверка ДО сверки token_version: перевод в неактивные отзывает токены, и с отозванным токеном
+    // человек получил бы 401 без причины — клиент после неудачного refresh не выходит.
+    const block = resolveEmploymentBlock(toEmploymentAccessState(fresh));
+    if (block) {
+      res.status(403).json({
+        success: false,
+        error: block.error,
+        code: block.code,
+      });
+      return;
+    }
     const freshVersion = Number.isFinite(fresh.token_version) ? fresh.token_version : 0;
     if (freshVersion !== decodedVersion) {
       res.status(401).json({ success: false, error: 'Token revoked' });
-      return;
-    }
-    // Уволенный на портал не допускается. 403, а не 401: у клиента валидный токен,
-    // обновлять его незачем — api/client.ts повторяет запрос только на 401.
-    if (isDismissedEmploymentStatus(fresh.employment_status)) {
-      res.status(403).json({
-        success: false,
-        error: DISMISSED_ACCOUNT_ERROR,
-        code: DISMISSED_ACCOUNT_CODE,
-      });
       return;
     }
 

@@ -41,6 +41,11 @@ import { StaffSectionSelect } from '../components/staff/StaffSectionSelect';
 import { StaffSortHeader } from '../components/staff/StaffSortHeader';
 import { STAFF_SORT_OPTIONS, isStaffSortKey } from '../components/staff/staffSort';
 import { StaffMonthMovement } from '../components/staff/StaffMonthMovement';
+import { StaffStatusTabs } from '../components/staff/StaffStatusTabs';
+import { StaffCategoryCounts } from '../components/staff/StaffCategoryCounts';
+import { StaffInactiveActionButton } from '../components/staff/StaffInactiveActionButton';
+import type { StaffInactiveAction } from '../utils/staffInactive';
+import { StaffInactiveConfirmModal } from '../components/staff/StaffInactiveConfirmModal';
 import { StaffColumnFilterPopover } from '../components/staff/StaffColumnFilterPopover';
 import { StaffColumnFilterSheet } from '../components/staff/StaffColumnFilterSheet';
 import {
@@ -67,6 +72,8 @@ import {
   type StaffTableColumn,
 } from '../utils/staffColumns';
 import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
+import { staffCategoryFiltersKey, useStaffCategoryCounts } from '../hooks/useStaffCategoryCounts';
+import { useStaffInactiveAction } from '../hooks/useStaffInactiveAction';
 import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { affectsActiveFilters, affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
 import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
@@ -96,7 +103,10 @@ import {
   getMoscowISODate,
   handleMiddleClickMouseDown,
   openEmployeeInNewTab,
+  parseStaffStatusFilter,
   SCHEDULE_SOURCE_LABELS,
+  staffRowActionKind,
+  toApiStaffStatus,
   type IAddEmployeeForm,
   type IEmployeeScheduleView,
   type ModalType,
@@ -159,13 +169,16 @@ interface IStaffRowProps {
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
+  /** «Перевести в неактивные» / «Вернуть в активные» — только с правом учётки (миграция 381). */
+  onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
+  const actionKind = staffRowActionKind(emp, { canReturn: !!onReturn, canRehire: !!onRehire, canCancelDismissal: !!onCancelDismissal });
   const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
 
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -261,17 +274,18 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureR
           <StaffCommentCell employee={emp} onEdit={onEditComment} />
         </td>
       )}
-      <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} /></td>
+      <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} /></td>
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
-        {onReturn && emp.excluded_from_timesheet ? (
+        {/* Действие решает состояние строки (staffRowActionKind): на «Все» уволенному — «Восстановить», а не «Вернуть в табель». */}
+        {onReturn && actionKind === 'return' ? (
           <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
             Вернуть в табель
           </button>
-        ) : onRehire && emp.employment_status === 'fired' ? (
+        ) : onRehire && actionKind === 'rehire' ? (
           <button className="sc-btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} title="Восстановить сотрудника" onClick={() => onRehire(emp)}>
             Восстановить
           </button>
-        ) : onCancelDismissal && emp.employment_status === 'active' && emp.dismissal_date ? (
+        ) : onCancelDismissal && actionKind === 'cancel-dismissal' ? (
           <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <span title={`Уволится ${emp.dismissal_date}`} style={{ fontSize: 11, color: '#dc2626', whiteSpace: 'nowrap' }}>
               <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
@@ -287,6 +301,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureR
           </span>
         ) : (
           <span style={{ display: 'inline-flex', gap: 4 }}>
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} />
             {onFire && emp.employment_status !== 'fired' && (
               <button
                 className="sc-btn-icon"
@@ -932,6 +947,7 @@ interface IVirtualTableProps extends IVirtualListLoadProps {
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
+  onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
   sort: StaffSortKey;
   dir: StaffSortDir;
   onSort: (key: StaffSortKey) => void;
@@ -993,6 +1009,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onCancelDismissal,
   onReturn,
   onEditComment,
+  onInactiveAction,
   sort,
   dir,
   onSort,
@@ -1103,6 +1120,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     onCancelDismissal={onCancelDismissal}
                     onReturn={onReturn}
                     onEditComment={onEditComment}
+                    onInactiveAction={onInactiveAction}
                   />
                 );
               })}
@@ -1143,6 +1161,7 @@ interface IVirtualCardsProps extends IVirtualListLoadProps {
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
+  onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
 }
 
 const CARD_ESTIMATE = 250;
@@ -1167,11 +1186,13 @@ const MobileCard: FC<{
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
-}> = memo(({ emp, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+  onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
+}> = memo(({ emp, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
   const isSelected = selectedIds.has(emp.id);
+  const actionKind = staffRowActionKind(emp, { canReturn: !!onReturn, canRehire: !!onRehire, canCancelDismissal: !!onCancelDismissal });
   const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
   const handleAuxClick = (e: ReactMouseEvent) => {
     if (e.button === 1) {
@@ -1195,7 +1216,7 @@ const MobileCard: FC<{
               Исключён
             </span>
           )}
-          <StaffSignBadge sign={emp.sign} />
+          <StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} />
         </div>
         {selectionMode && (
           <div className="sc-card-check" onClick={e => e.stopPropagation()}>
@@ -1262,15 +1283,16 @@ const MobileCard: FC<{
         </div>
       )}
       <div className="sc-card-actions">
-        {onReturn && emp.excluded_from_timesheet ? (
+        {/* Как в таблице (staffRowActionKind). */}
+        {onReturn && actionKind === 'return' ? (
           <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
             Вернуть в табель
           </button>
-        ) : onRehire && emp.employment_status === 'fired' ? (
+        ) : onRehire && actionKind === 'rehire' ? (
           <button className="sc-btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onRehire(emp); }}>
             Восстановить
           </button>
-        ) : onCancelDismissal && emp.employment_status === 'active' && emp.dismissal_date ? (
+        ) : onCancelDismissal && actionKind === 'cancel-dismissal' ? (
           <>
             <span style={{ fontSize: 12, color: '#dc2626', whiteSpace: 'nowrap' }}>
               <CalendarX size={12} style={{ verticalAlign: 'text-bottom', marginRight: 2 }} />
@@ -1286,6 +1308,7 @@ const MobileCard: FC<{
           </>
         ) : (
           <>
+            <StaffInactiveActionButton emp={emp} onAction={onInactiveAction} stopPropagation />
             {onFire && emp.employment_status !== 'fired' && (
               <button
                 className="sc-btn-icon"
@@ -1323,7 +1346,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1369,6 +1392,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, si
                 onCancelDismissal={onCancelDismissal}
                 onReturn={onReturn}
                 onEditComment={onEditComment}
+                onInactiveAction={onInactiveAction}
               />
             </div>
           );
@@ -1472,7 +1496,7 @@ export const StaffControlPage: FC = () => {
     const fromUrl = urlParams.get('section');
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
-  const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => (urlParams.get('status') === 'fired' ? 'fired' : 'active'));
+  const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => parseStaffStatusFilter(urlParams.get('status')));
   // Столбцы, скрытые шестерёнкой, читаются до сортировки и фильтров: условие из URL по скрытому
   // столбцу не применяется — иначе список сортировался бы и фильтровался по невидимому столбцу.
   const [initialHiddenColumns] = useState(loadHiddenStaffColumns);
@@ -1569,7 +1593,6 @@ export const StaffControlPage: FC = () => {
     isFetchNextPageError,
     loadMore,
     retryNextPage,
-    totalActive,
     refresh,
     reloadFromStart,
     patchEmployee,
@@ -1578,7 +1601,7 @@ export const StaffControlPage: FC = () => {
     departmentId: deptId || undefined,
     scheduleId: scheduleFilter || undefined,
     section,
-    status: statusFilter,
+    status: toApiStaffStatus(statusFilter),
     sort: sortKey,
     dir: sortDir,
     period: period ?? undefined,
@@ -2090,6 +2113,14 @@ export const StaffControlPage: FC = () => {
     });
   }, []);
 
+  // Массовые действия есть только на «Активных»: уход на «Уволенные» / «Все» (переключатель или чип «Уволены»)
+  // снимает режим выбора, иначе выбранные строки другой вкладки ушли бы в массовую операцию.
+  useEffect(() => {
+    if (statusFilter === 'active') return;
+    setSelectionMode(false);
+    setSelectedEmployeeIds([]);
+  }, [statusFilter]);
+
   /* ─── modal save handlers ─── */
 
   const handleSavePosition = useCallback(async (empId: number, val: string, reason?: string, date?: string) => {
@@ -2387,8 +2418,8 @@ export const StaffControlPage: FC = () => {
       search: debouncedSearch || undefined,
       departmentId: deptId || undefined,
       section,
-      status: 'active',
-      // Как в таблице: при чипе «Устроены» — только принятые с начала месяца.
+      // Как в таблице «Активные» (без неактивных, миграция 381): при чипе «Устроены» — только принятые с начала месяца.
+      status: 'working',
       period: period === 'hired_month' ? period : undefined,
       cf: columnFiltersKey || undefined,
       view: 'list',
@@ -2576,7 +2607,7 @@ export const StaffControlPage: FC = () => {
         departmentId: deptId || undefined,
         scheduleId: scheduleFilter || undefined,
         section,
-        status: statusFilter,
+        status: toApiStaffStatus(statusFilter),
         period: period ?? undefined,
         sort: sortKey,
         dir: sortDir,
@@ -2597,7 +2628,7 @@ export const StaffControlPage: FC = () => {
     departmentId: deptId || undefined,
     scheduleId: scheduleFilter || undefined,
     section,
-    status: statusFilter,
+    status: toApiStaffStatus(statusFilter),
     period: period ?? undefined,
     cf: columnFiltersKey || undefined,
   }), [debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, columnFiltersKey]);
@@ -2635,11 +2666,41 @@ export const StaffControlPage: FC = () => {
     return items;
   }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetOffice]);
 
+  // ИТР / Рабочие / Остальные (миграция 381) — те же фильтры, статус и период, что у таблицы. Показываем только
+  // числа ровно этого набора: список при смене фильтров держит прежние строки, а разбивка приходит отдельно.
+  const categoryCountsParams = {
+    section,
+    departmentId: deptId,
+    search: debouncedSearch,
+    scheduleId: scheduleFilter,
+    status: toApiStaffStatus(statusFilter),
+    period,
+    cf: columnFiltersKey,
+  };
+  const categoryCountsQuery = useStaffCategoryCounts({
+    ...categoryCountsParams,
+    enabled: sectionChoice !== null || scopeKnown,
+  });
+  const categoryData = categoryCountsQuery.data;
+  const categoryCounts = categoryData
+    && categoryData.filtersKey === staffCategoryFiltersKey(categoryCountsParams)
+    && categoryData.counts.total === total
+    ? categoryData.counts
+    : null;
+
+  // Действия строки решает её состояние; вкладка лишь ограничивает набор: на «Все» есть и неуволенные, и уволенные.
+  const rowsMayBeWorking = statusFilter === 'active' || statusFilter === 'all';
+  const rowsMayBeFired = statusFilter === 'fired' || statusFilter === 'all';
+  // «Перевести в неактивные» / «Вернуть в активные» — флаг учётки (миграция 381), роль его не даёт.
+  const canManageStaffInactive = profile?.can_manage_staff_inactive === true;
+  const inactiveAction = useStaffInactiveAction(refreshAfterEmployeeChange);
+
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
-      {total}{statusFilter === 'active' ? ` из ${totalActive}` : ''}
+      {total}
+      {categoryCounts && <StaffCategoryCounts counts={categoryCounts} />}
     </span>
-  ), [total, statusFilter, totalActive]);
+  ), [total, categoryCounts]);
   useHeaderAddon(headerCounter);
 
   const controlsBar = (
@@ -2676,28 +2737,7 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      {canViewFired && (
-        <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={statusFilter === 'active'}
-            className={`sc-seg-btn${statusFilter === 'active' ? ' is-active' : ''}`}
-            onClick={() => handleStatusChange('active')}
-          >
-            Действующие
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={statusFilter === 'fired'}
-            className={`sc-seg-btn${statusFilter === 'fired' ? ' is-active' : ''}`}
-            onClick={() => handleStatusChange('fired')}
-          >
-            Уволенные
-          </button>
-        </div>
-      )}
+      {canViewFired && <StaffStatusTabs value={statusFilter} onChange={handleStatusChange} />}
       {isMobile && (
         <select
           className="sc-schedule-filter sc-sort-select"
@@ -2761,6 +2801,8 @@ export const StaffControlPage: FC = () => {
       {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N», фильтры столбцов. */}
       {(canViewFired || isMobile || activeColumnFilterCount > 0) && (
         <div className="sc-movement-row">
+          {/* На узком экране разбивке нет места в шапке — она здесь (CSS: .sc-category-counts--row). */}
+          {categoryCounts && <StaffCategoryCounts counts={categoryCounts} className="sc-category-counts--row" />}
           {canViewFired && (
             <StaffMonthMovement
               data={monthMovement.data}
@@ -2856,11 +2898,12 @@ export const StaffControlPage: FC = () => {
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
-          onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
-          onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'active' && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
+          onRehire={rowsMayBeFired && canManageStaff ? handleRehire : undefined}
+          onFire={rowsMayBeWorking && canManageStaff ? handleFire : undefined}
+          onCancelDismissal={rowsMayBeWorking && canManageStaff ? handleCancelDismissal : undefined}
+          onReturn={rowsMayBeWorking && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
           onEditComment={commentEditHandler}
+          onInactiveAction={canManageStaffInactive ? inactiveAction.open : undefined}
         />
       ) : (
         <VirtualTable
@@ -2884,11 +2927,12 @@ export const StaffControlPage: FC = () => {
           allSelected={allVisibleSelected}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
-          onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
-          onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
-          onReturn={statusFilter === 'active' && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
+          onRehire={rowsMayBeFired && canManageStaff ? handleRehire : undefined}
+          onFire={rowsMayBeWorking && canManageStaff ? handleFire : undefined}
+          onCancelDismissal={rowsMayBeWorking && canManageStaff ? handleCancelDismissal : undefined}
+          onReturn={rowsMayBeWorking && canReturnToTimesheet ? handleReturnToTimesheet : undefined}
           onEditComment={commentEditHandler}
+          onInactiveAction={canManageStaffInactive ? inactiveAction.open : undefined}
           sort={sortKey}
           dir={sortDir}
           onSort={handleSort}
@@ -3222,6 +3266,16 @@ export const StaffControlPage: FC = () => {
       )}
 
       {/* ─── Fire Modal ─── */}
+      {inactiveAction.target && (
+        <StaffInactiveConfirmModal
+          emp={inactiveAction.target.emp}
+          action={inactiveAction.target.action}
+          inFlight={inactiveAction.inFlight}
+          onCancel={inactiveAction.close}
+          onConfirm={() => { void inactiveAction.confirm(); }}
+        />
+      )}
+
       {fireEmp && (
         <FireEmployeeModal
           emp={fireEmp}

@@ -171,7 +171,7 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
         is_archived boolean NOT NULL DEFAULT false, archived_at timestamptz, created_at timestamptz DEFAULT now(),
         updated_at timestamptz DEFAULT now(), excluded_from_timesheet boolean DEFAULT false,
         excluded_from_timesheet_at timestamptz, hire_date date, birth_date date, dismissal_date date,
-        sigur_employee_id integer
+        sigur_employee_id integer, staff_inactive_at timestamptz
       );
       CREATE TABLE employee_schedule_assignments (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), employee_id integer, schedule_id uuid,

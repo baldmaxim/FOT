@@ -5,6 +5,7 @@ import { employeesExportController } from '../controllers/employees-export.contr
 import { employeesMainObjectsController } from '../controllers/employees-main-objects.controller.js';
 import { employeesSectionDepartmentsController } from '../controllers/employees-section-departments.controller.js';
 import { employeesStaffController } from '../controllers/employees-staff.controller.js';
+import { deactivateEmployee, reactivateEmployee } from '../controllers/employee-inactive.controller.js';
 import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -190,6 +191,15 @@ router.get(
   employeesStaffController.getMonthMovement
 );
 
+// GET /api/employees/category-counts — ИТР / Рабочие / Остальные таблицы по текущим фильтрам (плашка в шапке).
+// noStore: после перевода, приёма, увольнения числа обязаны обновиться сразу.
+router.get(
+  '/category-counts',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesStaffController.getCategoryCounts
+);
+
 // PUT /api/employees/:id/staff-comment — комментарий HR (оптимистичная блокировка, аудит).
 router.put(
   '/:id/staff-comment',
@@ -342,6 +352,23 @@ router.post(
   '/:id/rehire',
   requirePageAccess('/staff-control', 'edit'),
   employeesController.rehire
+);
+
+// POST /api/employees/:id/deactivate — «Перевести в неактивные» (миграция 381): закрывает вход. Право — флаг учётки
+// can_manage_staff_inactive (проверяет контроллер), роль его не даёт.
+router.post(
+  '/:id/deactivate',
+  requirePageAccess('/staff-control', 'edit'),
+  requireCritical2FA,
+  deactivateEmployee
+);
+
+// POST /api/employees/:id/reactivate — «Вернуть в активные»: снимает ручную метку. Право — то же.
+router.post(
+  '/:id/reactivate',
+  requirePageAccess('/staff-control', 'edit'),
+  requireCritical2FA,
+  reactivateEmployee
 );
 
 // POST /api/employees/:id/cancel-dismissal - отменить запланированное увольнение (header+)

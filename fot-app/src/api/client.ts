@@ -46,6 +46,14 @@ export const API_ORIGIN = typeof window !== 'undefined'
 export const DISMISSED_ACCOUNT_CODE = 'EMPLOYEE_DISMISSED';
 /** Учётка отключена (чёрный список, миграция 273) — выкидываем на форму входа. */
 export const ACCOUNT_DISABLED_CODE = 'ACCOUNT_DISABLED';
+/** Сотрудник переведён в неактивные (миграция 381) — выкидываем на форму входа, как уволенного. */
+export const INACTIVE_ACCOUNT_CODE = 'EMPLOYEE_INACTIVE';
+/** Коды 403, после которых сессия сбрасывается и форма входа показывает причину. */
+export const BLOCKED_ACCOUNT_CODES: ReadonlySet<string> = new Set([
+  DISMISSED_ACCOUNT_CODE,
+  ACCOUNT_DISABLED_CODE,
+  INACTIVE_ACCOUNT_CODE,
+]);
 /** Событие для AuthContext: сбросить состояние и показать причину. */
 export const ACCOUNT_DISMISSED_EVENT = 'fot:account-dismissed';
 
@@ -389,9 +397,8 @@ export const apiClient = {
       // Сотрудника уволили посреди сессии. Обычный 403 сессию не роняет, и человек
       // остался бы в интерфейсе, где не работает ничего. Токен сбрасываем сразу,
       // а AuthContext по событию очищает состояние и уводит на форму входа.
-      // ACCOUNT_DISABLED — то же поведение: учётку отключил чёрный список.
-      if (response.status === 403
-          && (error.code === DISMISSED_ACCOUNT_CODE || error.code === ACCOUNT_DISABLED_CODE)) {
+      // ACCOUNT_DISABLED — то же поведение: учётку отключил чёрный список; EMPLOYEE_INACTIVE — перевод в неактивные.
+      if (response.status === 403 && typeof error.code === 'string' && BLOCKED_ACCOUNT_CODES.has(error.code)) {
         setSessionToken(null);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent(ACCOUNT_DISMISSED_EVENT, {

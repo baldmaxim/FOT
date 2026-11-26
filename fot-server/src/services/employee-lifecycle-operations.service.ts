@@ -102,7 +102,7 @@ export function newLeaseOwner(): string {
   return `${PROCESS_ID}:${Date.now().toString(36)}:${ownerCounter}`;
 }
 
-export const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, created_at, updated_at';
+export const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, staff_inactive_at, created_at, updated_at';
 
 const OPERATION_COLUMNS = `id, employee_id, kind, status, source, base_revision, sigur_employee_id,
   from_department_id, target_department_id, target_sigur_department_id,
@@ -720,6 +720,10 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
               excluded_from_timesheet = true,
               excluded_from_timesheet_date = $3,
               dismissal_apply_started_at = NULL,
+              -- Ручная метка «Неактивный» (миграция 381) снимается: уволенный — только «Уволен», а восстановленный
+              -- станет «Активным».
+              staff_inactive_at = NULL,
+              staff_inactive_by = NULL,
               lifecycle_revision = lifecycle_revision + 1,
               updated_at = now()
         WHERE id = $4
@@ -908,6 +912,9 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
               dismissal_apply_started_at = NULL,
               excluded_from_timesheet = false,
               excluded_from_timesheet_date = NULL,
+              -- Восстановленный — «Активный» (миграция 381); метку снимает и увольнение, здесь — на случай старых строк.
+              staff_inactive_at = NULL,
+              staff_inactive_by = NULL,
               lifecycle_revision = lifecycle_revision + 1,
               updated_at = now()
         WHERE id = $3

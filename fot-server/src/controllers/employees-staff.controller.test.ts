@@ -86,10 +86,12 @@ describe('GET /employees/month-movement', () => {
       expect(res.body).toEqual({ success: true, data: { month_start: '2026-10-01', today: '2026-10-01', hired: 3, fired: 7 } });
       const [sql, params] = h.queryOne.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain(`employment_status <> 'fired'`);
-      expect(sql).toContain('hire_date BETWEEN $2::date AND $3::date');
-      expect(sql).toContain('dismissal_date BETWEEN $2::date AND $3::date');
+      // «Устроены» открывает «Активные»: принятые — тем же условием, без неактивных (миграция 381).
+      expect(sql).toContain('NOT (staff_inactive_at IS NOT NULL OR COALESCE(org_department_id = ANY($2::uuid[]), false))');
+      expect(sql).toContain('hire_date BETWEEN $3::date AND $4::date');
+      expect(sql).toContain('dismissal_date BETWEEN $3::date AND $4::date');
       expect(sql).not.toMatch(/WHERE[\s\S]*employment_status = 'fired'\s*$/);
-      expect(params).toEqual([false, '2026-10-01', '2026-10-01']);
+      expect(params).toEqual([false, [], '2026-10-01', '2026-10-01']);
     } finally {
       vi.useRealTimers();
     }
@@ -179,7 +181,7 @@ describe('GET /employees/export-view', () => {
     expect(res.body).toMatchObject({ code: 'EXPORT_TOO_LARGE' });
 
     for (const [query, code] of [
-      [{ status: 'all' }, 'INVALID_STATUS'],
+      [{ status: 'everyone' }, 'INVALID_STATUS'],
       [{ period: 'year' }, 'INVALID_PERIOD'],
       [{ sort: 'cost_item' }, 'INVALID_SORT'],
     ] as const) {

@@ -114,6 +114,7 @@ export function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache
     excluded_from_timesheet: Boolean(encrypted.excluded_from_timesheet ?? false),
     excluded_from_timesheet_at: encrypted.excluded_from_timesheet_at ?? null,
     excluded_from_timesheet_date: encrypted.excluded_from_timesheet_date ?? null,
+    staff_inactive_at: encrypted.staff_inactive_at ?? null,
   };
 }
 
@@ -156,5 +157,6 @@ export function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: St
     excluded_from_timesheet: Boolean(encrypted.excluded_from_timesheet ?? false),
     excluded_from_timesheet_at: encrypted.excluded_from_timesheet_at ?? null,
     excluded_from_timesheet_date: encrypted.excluded_from_timesheet_date ?? null,
+    staff_inactive_at: encrypted.staff_inactive_at ?? null,
   };
 }

@@ -12,7 +12,7 @@ import { auditService } from '../services/audit.service.js';
 import { loadStructureCache, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { getAllDepartmentsTree } from '../services/skud-shared.service.js';
 import { staffSiteLabel, type IStaffSqlContext } from '../services/staff-site.service.js';
-import { buildSignDepartmentIndex, resolveEmployeeSign } from '../utils/employee-sign.js';
+import { buildSignDepartmentIndex, findAutoInactiveDepartmentName, resolveEmployeeSign } from '../utils/employee-sign.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 
 /** Имя для сортировки и курсора: колонка допускает NULL, а (NULL, id) > (...) выбросил бы строку. */
@@ -53,6 +53,12 @@ export function parseKeysetParams(queryParams: Record<string, unknown>, status: 
   return { ok: true, keyset: { after: { name, id } } };
 }
 
+/** timestamptz из pg приходит Date — в ответ отдаём ISO-строку; пусто — null. */
+const toIsoTimestamp = (value: unknown): string | null => {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  return typeof value === 'string' && value ? value : null;
+};
+
 /** Строки employees → ответ списка; для view=staff — дата рождения, признак и участок сотрудника. */
 export async function mapEmployeeRows(
   rows: Array<Record<string, unknown>>,
@@ -65,6 +71,7 @@ export async function mapEmployeeRows(
   return rows.map(emp => {
     const mapped = decryptEmployeeList(emp as unknown as EmployeeEncrypted, structureCache);
     if (!signIndex || !siteIndex) return mapped as unknown as Record<string, unknown>;
+    const staffInactiveAt = toIsoTimestamp(emp.staff_inactive_at);
     return {
       ...mapped,
       birth_date: typeof emp.birth_date === 'string' ? emp.birth_date : null,
@@ -75,7 +82,14 @@ export async function mapEmployeeRows(
         employmentStatus: mapped.employment_status,
         departmentId: mapped.org_department_id,
         deptById: signIndex,
+        staffInactiveAt: staffInactiveAt,
       }),
+      // Ручная метка «Неактивный» и ветка «Декрет»/«Архив» (миграция 381): по ним фронт решает кнопки
+      // «Перевести в неактивные» / «Вернуть в активные» и текст предупреждения.
+      staff_inactive_at: staffInactiveAt,
+      inactive_department_name: mapped.employment_status === 'fired'
+        ? null
+        : findAutoInactiveDepartmentName(mapped.org_department_id, signIndex),
       site_supervisor_names: staffSiteLabel(siteIndex, Number(mapped.id), mapped.org_department_id ?? null),
     };
   });

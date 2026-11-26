@@ -2,10 +2,7 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
-import {
-  DISMISSED_ACCOUNT_ERROR,
-  isProfileAllowedToSignIn,
-} from '../services/account-status.service.js';
+import { authorizeSocketHandshake } from './socket-handshake-auth.js';
 import { chatService } from '../services/chat.service.js';
 import { isChatError } from '../services/chat.errors.js';
 import { dispatchChatMessage } from '../services/chat-delivery.service.js';
@@ -37,10 +34,12 @@ export const setupChatSocket = (io: Server) => {
         return next(new Error('Account not approved'));
       }
       // Access-токен живёт 7 дней и уже открытое соединение не перепроверяется,
-      // поэтому статус читаем из БД на каждом подключении. Уволенного не пускаем
-      // (его живые сокеты рвёт runDismiss сразу после увольнения).
-      if (!(await isProfileAllowedToSignIn(decoded.sub))) {
-        return next(new Error(DISMISSED_ACCOUNT_ERROR));
+      // поэтому статус читаем из БД на каждом подключении. Уволенного и неактивного
+      // не пускаем (их живые сокеты рвут runDismiss и перевод в неактивные), отозванный
+      // токен — тоже: иначе после «Вернуть в активные» старая сессия открыла бы сокет.
+      const handshakeError = await authorizeSocketHandshake(decoded);
+      if (handshakeError) {
+        return next(new Error(handshakeError));
       }
       socket.userId = decoded.sub;
       socket.employeeId = decoded.employee_id ?? null;

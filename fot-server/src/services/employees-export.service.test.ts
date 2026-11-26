@@ -56,6 +56,7 @@ const emp = (
   hire_date: null,
   position_name: null,
   effective_department_id,
+  staff_inactive_at: null,
   in_department_scope: true,
   ...overrides,
 });
@@ -136,22 +137,29 @@ describe('buildExportSections', () => {
     expect(sections[0].rows[0]).toMatchObject({ sign: 'Уволен', departmentPath: 'Уволенные' });
   });
 
-  it('приоритет признака: Уволен > Декрет > Работает', () => {
+  it('приоритет признака: Уволен > Неактивен > Работает (миграция 381)', () => {
     const sections = build([
       emp(1, 'Декретная Д.', 'su-decret'),
       emp(2, 'Уволенная из декрета У.', 'su-decret', { employment_status: 'fired' }),
       emp(3, 'Работник Р.', 'su-vent'),
+      emp(4, 'Переведённый вручную П.', 'su-vent', { staff_inactive_at: '2026-11-26T08:00:00.000Z' }),
+      emp(5, 'Уволенный с меткой У.', 'su-vent', { employment_status: 'fired', staff_inactive_at: new Date('2026-11-01T00:00:00Z') }),
     ]);
 
     const signs = Object.fromEntries(section(sections, 'su10')!.rows.map(row => [row.employeeId, row.sign]));
-    expect(signs).toEqual({ 1: 'Декрет', 2: 'Уволен', 3: 'Работает' });
+    expect(signs).toEqual({ 1: 'Неактивен', 2: 'Уволен', 3: 'Работает', 4: 'Неактивен', 5: 'Уволен' });
   });
 
-  it('«Декрет» распознаётся и на вложенном отделе', () => {
-    const departments = [...DEPARTMENTS, dept('decret-child', 'Группа 1', 'su-decret')];
-    const sections = build([emp(1, 'Декретная Д.', 'decret-child')], new Map(), departments);
+  it('«Декрет» и «Архив» распознаются и на вложенном отделе', () => {
+    const departments = [
+      ...DEPARTMENTS,
+      dept('decret-child', 'Группа 1', 'su-decret'),
+      dept('su-archive', ' архив ', SU10_ROOT_ID),
+      dept('archive-child', 'Группа 2', 'su-archive'),
+    ];
+    const sections = build([emp(1, 'Декретная Д.', 'decret-child'), emp(2, 'Архивная А.', 'archive-child')], new Map(), departments);
 
-    expect(sections[0].rows[0].sign).toBe('Декрет');
+    expect(sections[0].rows.map(row => row.sign)).toEqual(['Неактивен', 'Неактивен']);
   });
 
   it('прямой подчинённый вне скоупа отделов — «Прочие» без пути', () => {

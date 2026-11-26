@@ -47,6 +47,10 @@ export interface Employee {
   site_manager_full_name?: string | null;
   /** «Признак» в «Управлении кадрами» (только список view=staff). */
   sign?: EmployeeSign;
+  /** Ручная метка «Неактивный» (миграция 381): ISO-время перевода; null — не переведён вручную. */
+  staff_inactive_at?: string | null;
+  /** Отдел «Декрет»/«Архив», из-за которого сотрудник неактивен (только список view=staff); null — нет. */
+  inactive_department_name?: string | null;
   /** «Участок» в «Управлении кадрами»: начальники участка через запятую (только список view=staff). */
   site_supervisor_names?: string | null;
   /** Комментарий HR (только список view=staff). */
@@ -56,7 +60,7 @@ export interface Employee {
   staff_comment_updated_by_name?: string | null;
 }
 
-export type EmployeeSign = 'Работает' | 'Уволен' | 'Декрет';
+export type EmployeeSign = 'Работает' | 'Уволен' | 'Неактивен';
 
 // Типы для обогащения сотрудников из Excel
 export interface EnrichPreviewItem {

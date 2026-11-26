@@ -7,11 +7,19 @@ interface ApiResponse<T> {
   message?: string;
 }
 
+/**
+ * Статус списка на сервере:
+ *  active   — «не уволен» (прежний смысл: окна выбора сотрудника находят и людей из «Декрета»);
+ *  working  — «Активные» экрана кадров: не уволен и не неактивен (миграция 381);
+ *  fired    — «Уволенные»; all — «Все»; excluded — исключённые из табеля.
+ */
+export type StaffApiStatus = 'active' | 'working' | 'fired' | 'all' | 'excluded';
+
 export interface PaginatedParams {
   page: number;
   pageSize?: number;
   search?: string;
-  status?: 'active' | 'fired' | 'excluded';
+  status?: StaffApiStatus;
   departmentId?: string;
   /** UUID шаблона графика или '__default__' (без персонального override) */
   scheduleId?: string;
@@ -52,7 +60,7 @@ export interface IStaffViewParams {
   departmentId?: string;
   scheduleId?: string;
   section?: string;
-  status?: 'active' | 'fired' | 'excluded';
+  status?: StaffApiStatus;
   period?: StaffPeriod;
   sort?: StaffSortKey;
   dir?: StaffSortDir;
@@ -71,6 +79,14 @@ export interface IStaffColumnValues {
   values: IStaffColumnValue[];
   /** Вариантов больше показанных — уточните поиском. */
   truncated: boolean;
+}
+
+/** Разбивка таблицы на ИТР / Рабочие / Остальные (плашка в шапке). itr + worker + other = total. */
+export interface IStaffCategoryCounts {
+  total: number;
+  itr: number;
+  worker: number;
+  other: number;
 }
 
 export interface IStaffMonthMovement {
@@ -299,6 +315,32 @@ export const employeeService = {
     const qs = new URLSearchParams();
     appendStaffViewParams(qs, params);
     const response = await apiClient.get<ApiResponse<IStaffMonthMovement>>(`/employees/month-movement?${qs}`, { signal });
+    return response.data;
+  },
+
+  /** ИТР / Рабочие / Остальные по тем же фильтрам, что у таблицы (статус и период — тоже). */
+  async getCategoryCounts(
+    params: Omit<IStaffViewParams, 'sort' | 'dir' | 'columns'>,
+    signal?: AbortSignal,
+  ): Promise<IStaffCategoryCounts> {
+    const qs = new URLSearchParams();
+    appendStaffViewParams(qs, params);
+    const response = await apiClient.get<ApiResponse<IStaffCategoryCounts>>(`/employees/category-counts?${qs}`, { signal });
+    return response.data;
+  },
+
+  /** «Перевести в неактивные» (миграция 381): вход на портал закрывается сразу. */
+  async deactivate(id: number): Promise<{ id: number; staff_inactive_at: string }> {
+    const response = await apiClient.post<ApiResponse<{ id: number; staff_inactive_at: string }>>(`/employees/${id}/deactivate`);
+    return response.data;
+  },
+
+  /**
+   * «Вернуть в активные»: снимает ручную метку. inactive_department_name — отдел «Декрет»/«Архив», из-за которого
+   * сотрудник всё равно остаётся неактивным (null — стал активным).
+   */
+  async reactivate(id: number): Promise<{ id: number; inactive_department_name: string | null }> {
+    const response = await apiClient.post<ApiResponse<{ id: number; inactive_department_name: string | null }>>(`/employees/${id}/reactivate`);
     return response.data;
   },
 

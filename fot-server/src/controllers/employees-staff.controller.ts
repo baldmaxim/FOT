@@ -16,6 +16,8 @@ import {
   type IStaffViewExportRow,
 } from '../services/employees-staff-view-excel.service.js';
 import { buildStaffSiteFacetJoinSql, createStaffSqlContext, type IStaffSqlContext } from '../services/staff-site.service.js';
+import { countStaffCategories, loadStaffCategorySources } from '../services/staff-category.service.js';
+import { loadAutoInactiveDepartmentIds, workingConditionSql } from '../services/employee-inactive.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { escapeLike } from '../utils/search.utils.js';
@@ -27,7 +29,7 @@ import {
   parseStaffStatus,
   periodConditionSql,
   resolveMonthRange,
-  statusConditionSql,
+  appendStaffStatusCondition,
 } from './employees-staff-filter.helpers.js';
 import {
   appendColumnFilters,
@@ -56,7 +58,9 @@ const staffCommentBodySchema = z.object({
 const SECTION_LABELS: Record<string, string> = {
   su10: 'СУ-10', sm: 'СМ', brigades: 'Бригады', contractors: 'Подрядные', all: 'Все',
 };
-const STATUS_LABELS: Record<string, string> = { active: 'Действующие', fired: 'Уволенные', excluded: 'Исключённые' };
+const STATUS_LABELS: Record<string, string> = {
+  active: 'Действующие', working: 'Активные', fired: 'Уволенные', all: 'Все', excluded: 'Исключённые',
+};
 
 const formatFileDay = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
@@ -124,8 +128,7 @@ export const employeesStaffController = {
       }
       const { whereParts, params } = filter;
       const ctx = createStaffSqlContext();
-      const statusSql = statusConditionSql(statusParsed.value);
-      if (statusSql) whereParts.push(statusSql);
+      await appendStaffStatusCondition(whereParts, params, statusParsed.value);
       if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
       const valueColumn = column as StaffValueFilterColumn;
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx, valueColumn))) return;
@@ -246,11 +249,14 @@ export const employeesStaffController = {
       }
       const { whereParts, params } = filter;
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, createStaffSqlContext()))) return;
+      // «Устроены» открывает вкладку «Активные»: принятые считаются тем же условием (без неактивных, миграция 381),
+      // иначе чип и таблица разошлись бы.
+      const workingSql = workingConditionSql('', params, await loadAutoInactiveDepartmentIds());
       params.push(range.monthStart);
       const fromIdx = params.length;
       params.push(range.today);
       const toIdx = params.length;
-      const hiredSql = `employment_status <> 'fired' AND hire_date BETWEEN $${fromIdx}::date AND $${toIdx}::date`;
+      const hiredSql = `${workingSql} AND hire_date BETWEEN $${fromIdx}::date AND $${toIdx}::date`;
       const firedSql = `employment_status = 'fired' AND dismissal_date BETWEEN $${fromIdx}::date AND $${toIdx}::date`;
       // Своё множество — принятые и уволенные за месяц: по нему же решается допуск опечатки в поиске.
       whereParts.push(`((${hiredSql}) OR (${firedSql}))`);
@@ -274,6 +280,50 @@ export const employeesStaffController = {
     } catch (error) {
       console.error('Get month movement error:', error);
       res.status(500).json({ success: false, error: 'Не удалось посчитать движение сотрудников' });
+    }
+  },
+
+  /**
+   * GET /api/employees/category-counts — разбивка таблицы на ИТР / Рабочие / Остальные (плашка в шапке).
+   * WHERE собирается в том же порядке, что у списка (respondEmployeesPage): база → статус → период → фильтры
+   * столбцов → поиск по ФИО последним, поэтому total равен числу строк таблицы, а сумма категорий — total.
+   */
+  async getCategoryCounts(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const statusParsed = parseStaffStatus(req.query.status);
+      if (!statusParsed.ok) {
+        res.status(400).json({ success: false, error: 'Некорректный статус', code: 'INVALID_STATUS' });
+        return;
+      }
+      const periodParsed = parseStaffPeriod(req.query.period);
+      if (!periodParsed.ok) {
+        res.status(400).json({ success: false, error: 'Некорректный период', code: 'INVALID_PERIOD' });
+        return;
+      }
+      const columnFilters = parseStaffColumnFilters(req.query.cf);
+      if (!columnFilters.ok) {
+        res.status(400).json({ success: false, error: 'Некорректные фильтры столбцов', code: 'INVALID_COLUMN_FILTERS' });
+        return;
+      }
+      const filter = await buildStaffBaseFilter(req);
+      if (filter.kind === 'error') {
+        res.status(filter.status).json(filter.body);
+        return;
+      }
+      if (filter.kind === 'empty') {
+        res.json({ success: true, data: { total: 0, itr: 0, worker: 0, other: 0 } });
+        return;
+      }
+      const { whereParts, params } = filter;
+      await appendStaffStatusCondition(whereParts, params, statusParsed.value);
+      if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
+      if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, createStaffSqlContext()))) return;
+      await appendStaffFioSearch(whereParts, params, filter.search);
+      const counts = await countStaffCategories(whereParts, params, await loadStaffCategorySources());
+      res.json({ success: true, data: counts });
+    } catch (error) {
+      console.error('Get staff category counts error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось посчитать ИТР / Рабочие / Остальные' });
     }
   },
 
@@ -321,8 +371,7 @@ export const employeesStaffController = {
       }
       const { whereParts, params } = filter;
       const ctx = createStaffSqlContext();
-      const statusSql = statusConditionSql(status);
-      if (statusSql) whereParts.push(statusSql);
+      await appendStaffStatusCondition(whereParts, params, status);
       if (period) whereParts.push(periodConditionSql(period, resolveMonthRange(), params));
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx))) return;
       await appendStaffFioSearch(whereParts, params, filter.search);
@@ -401,7 +450,7 @@ export const employeesStaffController = {
       const section = typeof req.query.section === 'string' && req.query.section ? req.query.section : 'all';
       const today = resolveMonthRange().today;
       const fileName = sanitizeExportFileName(
-        `Сотрудники_${SECTION_LABELS[section] ?? 'Все'}_${STATUS_LABELS[status]}_${formatFileDay(today)}.xlsx`,
+        `Сотрудники_${SECTION_LABELS[section] ?? 'Все'}_${STATUS_LABELS[status] ?? 'Все'}_${formatFileDay(today)}.xlsx`,
       );
 
       // Строгий аудит до отправки файла: ошибка записи — 500 без файла.

@@ -451,7 +451,7 @@ describe('getAll — сортировка по столбцу (keyset + sort)', 
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ sort: 'cost_item', keyset: '1' }, 'INVALID_SORT'],
       [{ sort: 'name' }, 'INVALID_SORT'],
-      [{ sort: 'name', keyset: '1', status: 'all' }, 'INVALID_STATUS'],
+      [{ sort: 'name', keyset: '1', status: 'everyone' }, 'INVALID_STATUS'],
       [{ sort: 'name', keyset: '1', after_name: 'А', after_id: '3' }, 'INVALID_CURSOR'],
       [{ sort: 'name', keyset: '1', after_key: 'А', after_id: '3' }, 'INVALID_CURSOR'],
       [{ keyset: '1', period: 'week' }, 'INVALID_PERIOD'],

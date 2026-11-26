@@ -91,6 +91,10 @@ export const AUDIT_ACTIONS = {
   FIRE_EMPLOYEE_APPLIED: 'FIRE_EMPLOYEE_APPLIED',
   CANCEL_EMPLOYEE_DISMISSAL: 'CANCEL_EMPLOYEE_DISMISSAL',
   REHIRE_EMPLOYEE: 'REHIRE_EMPLOYEE',
+  /** «Перевести в неактивные» (миграция 381): ручная метка, вход закрыт. */
+  EMPLOYEE_DEACTIVATED: 'EMPLOYEE_DEACTIVATED',
+  /** «Вернуть в активные» (миграция 381): ручная метка снята. */
+  EMPLOYEE_REACTIVATED: 'EMPLOYEE_REACTIVATED',
   /** Sigur отдал уволенного в рабочем отделе: синк только фиксирует, реактивации нет. */
   SIGUR_SYNC_FIRED_MISMATCH: 'SIGUR_SYNC_FIRED_MISMATCH',
   /** Смена карточки Sigur у одного человека: привязка перенесена без создания дубля. */

@@ -11,7 +11,8 @@ import jwt from 'jsonwebtoken';
 
 const h = vi.hoisted(() => ({ queryOne: vi.fn(), getEmailByUserId: vi.fn() }));
 
-vi.mock('../config/postgres.js', () => ({ queryOne: h.queryOne }));
+// query — дерево отделов для правила «Декрет»/«Архив» (миграция 381); здесь отделов нет.
+vi.mock('../config/postgres.js', () => ({ queryOne: h.queryOne, query: vi.fn(async () => []) }));
 vi.mock('../services/local-auth.service.js', () => ({
   localAuthService: { getEmailByUserId: h.getEmailByUserId },
 }));

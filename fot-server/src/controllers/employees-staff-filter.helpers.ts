@@ -20,14 +20,24 @@ import {
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
+import { loadAutoInactiveDepartmentIds, workingConditionSql } from '../services/employee-inactive.service.js';
 import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql, type IFioSearch } from '../utils/fio-search.utils.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
-export type StaffStatus = 'active' | 'fired' | 'excluded';
+/**
+ * Статус списка:
+ *  active   — «не уволен» (прежний смысл: окна выбора сотрудника — Sigur, считыватель карт, подбор — должны находить
+ *             и людей из «Декрета»);
+ *  working  — «Активные» экрана кадров: не уволен и не неактивен (миграция 381);
+ *  fired    — «Уволенные»;
+ *  all      — «Все»: активные, неактивные и уволенные;
+ *  excluded — исключённые из табеля.
+ */
+export type StaffStatus = 'active' | 'working' | 'fired' | 'all' | 'excluded';
 export type StaffPeriod = 'hired_month' | 'fired_month';
 
-const STAFF_STATUSES: readonly StaffStatus[] = ['active', 'fired', 'excluded'];
+const STAFF_STATUSES: readonly StaffStatus[] = ['active', 'working', 'fired', 'all', 'excluded'];
 const STAFF_PERIODS: readonly StaffPeriod[] = ['hired_month', 'fired_month'];
 
 export interface IStaffBaseFilter {
@@ -236,12 +246,32 @@ export function resolveMonthRange(now: Date = new Date()): { monthStart: string;
   return { monthStart: `${today.slice(0, 7)}-01`, today };
 }
 
-/** Условие статуса, как было в списке: неизвестный статус (legacy) — без условия. */
-export function statusConditionSql(status: string | undefined): string | null {
+/**
+ * Условие статуса, как было в списке: неизвестный статус (legacy) — без условия, «Все» — тоже без условия.
+ * autoInactiveIds — отделы «Декрет»/«Архив» (loadAutoInactiveDepartmentIds), нужны только для working;
+ * параметр дописывается в params.
+ */
+export function statusConditionSql(
+  status: string | undefined,
+  params: unknown[],
+  autoInactiveIds: readonly string[],
+): string | null {
   if (status === 'fired') return `employment_status = 'fired'`;
   if (status === 'excluded') return `excluded_from_timesheet = true AND employment_status <> 'fired'`;
+  if (status === 'working') return workingConditionSql('', params, autoInactiveIds);
   if (status === 'active' || !status) return `employment_status <> 'fired'`;
   return null;
+}
+
+/** Условие статуса в whereParts; список отделов «Декрет»/«Архив» грузится только для working. */
+export async function appendStaffStatusCondition(
+  whereParts: string[],
+  params: unknown[],
+  status: string | undefined,
+): Promise<void> {
+  const autoInactiveIds = status === 'working' ? await loadAutoInactiveDepartmentIds() : [];
+  const sql = statusConditionSql(status, params, autoInactiveIds);
+  if (sql) whereParts.push(sql);
 }
 
 /** Условие периода месяца; параметры дописываются в params. */

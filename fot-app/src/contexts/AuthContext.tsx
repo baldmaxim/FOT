@@ -234,7 +234,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // AuthState причину не хранит — кладём её для формы входа, она покажет
       // сообщение вместо молчаливого выброса на логин.
       try {
-        sessionStorage.setItem('auth_notice', message || 'Учётная запись отключена: сотрудник уволен');
+        sessionStorage.setItem('auth_notice', message || 'Учётная запись отключена');
       } catch {
         // приватный режим — переживём без пояснения
       }
@@ -320,6 +320,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const unsubscribe = wsService.on('profile:access_changed', applyAccessChanged);
+    // Учётку закрыли, пока вкладка открыта (перевод в неактивные, миграция 381): сервер шлёт причину и рвёт сокет.
+    // Выход — тот же, что на 403 с кодом блокировки: сброс сессии и причина на форме входа.
+    const unsubscribeBlocked = wsService.on('account_blocked', (payload) => {
+      const message = typeof payload === 'object' && payload !== null && typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : undefined;
+      setSessionToken(null);
+      window.dispatchEvent(new CustomEvent(ACCOUNT_DISMISSED_EVENT, { detail: { message } }));
+    });
     // Событие могло прийти, пока сокет был отключён (рестарт бэкенда). После
     // реконнекта перечитываем профиль: точечные инвалидации тут не нужны —
     // useRealtimeQueryInvalidation делает один общий refetch активных запросов.
@@ -328,6 +337,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
     return () => {
       unsubscribe();
+      unsubscribeBlocked();
       unsubResync();
       wsService.disconnect('auth-context');
     };

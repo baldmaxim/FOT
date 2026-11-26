@@ -112,6 +112,8 @@ export interface UserProfileResponse {
   staff_tab_role_edit?: Record<StaffTab, boolean>;
   /** Может ставить галочки «Проживание»/«Удержания» в назначениях: правка вкладки по роли + охват «вся организация». */
   can_grant_staff_tabs?: Record<StaffTab, boolean>;
+  /** Кнопки «Перевести в неактивные» / «Вернуть в активные» (миграция 381, флаг учётки, выдаётся только SQL). */
+  can_manage_staff_inactive?: boolean;
   /** Назначен ответственным за согласование выходных хотя бы по одному таргету. */
   is_weekend_responsible?: boolean;
   supervisor_id: string | null;
@@ -139,6 +141,10 @@ export interface UserProfile {
   recovery_codes: string[] | null;
   two_factor_enabled: boolean;
   token_version: number;
+  /** Кнопки «Перевести в неактивные» / «Вернуть в активные» (миграция 381). */
+  can_manage_staff_inactive?: boolean;
+  /** Служебная учётка: неактивность карточки вход не закрывает (миграция 381). */
+  login_when_staff_inactive?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -253,6 +259,8 @@ export interface EmployeeEncrypted {
   excluded_from_timesheet?: boolean | null;
   excluded_from_timesheet_at?: string | null;
   excluded_from_timesheet_date?: string | null;
+  /** Ручная метка «Неактивный» (миграция 381). */
+  staff_inactive_at?: string | null;
 }
 
 // Сотрудник для API
@@ -291,6 +299,8 @@ export interface Employee {
   excluded_from_timesheet?: boolean;
   excluded_from_timesheet_at?: string | null;
   excluded_from_timesheet_date?: string | null;
+  /** Ручная метка «Неактивный» (миграция 381); «Декрет»/«Архив» — без метки, по отделу. */
+  staff_inactive_at?: string | null;
   site_name?: string | null;
   site_manager_full_name?: string | null;
   /** Объект табелирования (миграция 288): «Офис», имя объекта или null. */

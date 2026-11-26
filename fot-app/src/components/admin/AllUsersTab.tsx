@@ -42,6 +42,8 @@ export interface IUserFromApi {
   two_factor_enabled: boolean;
   /** Сотрудник уволен — вход на портал закрыт. */
   is_dismissed?: boolean;
+  /** Сотрудник неактивен («Декрет»/«Архив» или ручная метка, миграция 381) — вход закрыт. */
+  is_inactive?: boolean;
   approved_at: string | null;
   created_at: string;
 }
@@ -632,7 +634,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
       await adminService.updateUserEmployee(userId, employeeId);
       toast.success(employeeId ? `Привязан: ${empName ?? ''}` : 'Сотрудник отвязан');
       // Без привязки к карточке вход не закрывается — снимаем пометку сразу, не дожидаясь перезапроса.
-      patchUserInPageCaches(userId, employeeId === null ? { employee_id: null, is_dismissed: false } : { employee_id: employeeId });
+      patchUserInPageCaches(userId, employeeId === null ? { employee_id: null, is_dismissed: false, is_inactive: false } : { employee_id: employeeId });
       void queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] });
     } catch {
       toast.error('Ошибка привязки сотрудника');
@@ -874,13 +876,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   </span>
                   <div className={styles.userRowStatusCell}>
                     <span className={
-                      user.is_dismissed ? styles.notApproved
+                      user.is_dismissed || user.is_inactive ? styles.notApproved
                       : !user.is_approved ? styles.notApproved
                       : !user.email_confirmed ? styles.notApproved
                       : !user.two_factor_enabled ? styles.twoFaDisabled
                       : styles.approved
                     }>
-                      {user.is_dismissed ? 'Уволен — вход закрыт' : !user.is_approved ? 'Не одобрен' : !user.email_confirmed ? 'Email не подтверждён' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
+                      {user.is_dismissed ? 'Уволен — вход закрыт' : user.is_inactive ? 'Неактивен — вход закрыт' : !user.is_approved ? 'Не одобрен' : !user.email_confirmed ? 'Email не подтверждён' : !user.two_factor_enabled ? 'Ожидает 2FA' : 'Активен'}
                     </span>
                   </div>
                 </div>

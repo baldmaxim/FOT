@@ -23,6 +23,48 @@
   align-items: center;
 }
 
+/* Разбивка ИТР / Рабочие / Остальные (миграция 381): в плашке шапки рядом с числом; на узком экране в шапке места
+   нет (меню, заголовок, три иконки) — там она строкой под фильтрами (.sc-category-counts--row). */
+.sc-category-counts {
+  white-space: nowrap;
+}
+
+.sc-page-counter .sc-category-counts::before {
+  content: '·';
+  margin: 0 6px;
+}
+
+.sc-category-counts--row {
+  display: none;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .sc-page-counter .sc-category-counts {
+    display: none;
+  }
+
+  .sc-category-counts--row {
+    display: inline;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Окно «Перевести в неактивные» / «Вернуть в активные». */
+.sc-modal-title-icon {
+  vertical-align: text-bottom;
+  margin-right: 6px;
+}
+
+.sc-inactive-confirm-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
 .sc-page-actions {
   display: inline-flex;
   align-items: center;
@@ -1161,9 +1203,10 @@
   background: var(--error-muted);
 }
 
-.sc-sign--maternity {
-  color: var(--warning);
-  background: var(--warning-muted);
+/* «Неактивен» (миграция 381): «Декрет», «Архив» или ручная метка — нейтрально, не тревога. */
+.sc-sign--inactive {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
 }
 
 .sc-table thead {

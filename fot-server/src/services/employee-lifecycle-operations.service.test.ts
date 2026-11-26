@@ -435,6 +435,9 @@ describe('runOperation — dismiss', () => {
     expect(fire.sql).toContain('lifecycle_revision = lifecycle_revision + 1');
     expect(fire.sql).toContain('lifecycle_revision = $5');
     expect(fire.sql).toContain("employment_status = 'active'");
+    // Ручная метка «Неактивный» (миграция 381) снимается тем же UPDATE: уволенный — «Уволен», восстановленный — «Активный».
+    expect(fire.sql).toContain('staff_inactive_at = NULL');
+    expect(fire.sql).toContain('staff_inactive_by = NULL');
     // target, dismissal_date, exclusion D+1, id, base_revision
     expect(fire.params).toEqual(['arch-1', '2026-05-20', '2026-05-21', 77, 3]);
 
@@ -931,6 +934,8 @@ describe('runOperation — rehire', () => {
     const upd = tx.find(c => c.sql.includes("employment_status = 'active'") && c.sql.includes('UPDATE employees'))!;
     expect(upd.sql).toContain("employment_status = 'fired'");
     expect(upd.sql).toContain('lifecycle_revision = lifecycle_revision + 1');
+    // Восстановленный — «Активный» (миграция 381): ручная метка «Неактивный» не переживает восстановление.
+    expect(upd.sql).toContain('staff_inactive_at = NULL');
     expect(upd.params).toEqual(['dept-2', false, 77, 3]);
 
     const evt = tx.find(c => c.sql.includes('INSERT INTO employee_dismissal_events'))!;

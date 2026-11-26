@@ -26,7 +26,7 @@ import {
   parseStaffStatus,
   periodConditionSql,
   resolveMonthRange,
-  statusConditionSql,
+  appendStaffStatusCondition,
 } from './employees-staff-filter.helpers.js';
 import {
   appendColumnFilters,
@@ -44,7 +44,7 @@ import {
   type IStaffSortCursor,
 } from './employees-staff-sort.helpers.js';
 
-export const LIST_COLUMNS = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
+export const LIST_COLUMNS = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at, staff_inactive_at';
 // Оклады в «Управлении кадрами» не отдаются (ключ /salary/terms). Даты — для столбцов,
 // dismissal_date — кнопке отмены запланированного увольнения, комментарий — столбцу «Комментарий».
 export const STAFF_COLUMNS = `${LIST_COLUMNS}, hire_date, birth_date, dismissal_date, ${STAFF_COMMENT_LIST_COLUMNS_SQL}`;
@@ -106,8 +106,7 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   const { whereParts, params, showArchived } = filter;
   // Один индекс участков на запрос: фильтр, сортировка и ячейка — по одному состоянию назначений.
   const ctx = createStaffSqlContext();
-  const statusSql = statusConditionSql(status);
-  if (statusSql) whereParts.push(statusSql);
+  await appendStaffStatusCondition(whereParts, params, status);
   if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
   try {
     await appendColumnFilters(whereParts, params, columnFiltersParsed.filters, { ctx });

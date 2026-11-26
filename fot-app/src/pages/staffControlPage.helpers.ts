@@ -7,12 +7,44 @@
  */
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleType } from '../types/schedule';
+import type { StaffApiStatus } from '../services/employeeService';
+import type { Employee } from '../types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 // Модалок оклада здесь нет: оклады ведутся в разделе «Зарплата» (/salary/terms).
 export type ModalType = 'position' | 'department' | 'schedule';
-export type StaffStatusFilter = 'active' | 'fired' | 'excluded';
+/** Вкладка экрана: «Активные» | «Уволенные» | «Все» (excluded — прежний контракт, экран его не показывает). */
+export type StaffStatusFilter = 'active' | 'fired' | 'all' | 'excluded';
+
+/** Значение ?status= в адресе экрана; неизвестное — «Активные». */
+export const parseStaffStatusFilter = (value: string | null): StaffStatusFilter =>
+  value === 'fired' || value === 'all' ? value : 'active';
+
+/**
+ * Статус для сервера: вкладка «Активные» — working (без неактивных, миграция 381). Прежний active сервера
+ * («не уволен») остаётся окнам выбора сотрудника.
+ */
+export const toApiStaffStatus = (filter: StaffStatusFilter): StaffApiStatus =>
+  filter === 'active' ? 'working' : filter;
+
+/** Что показывает столбец действий строки: одно главное действие или обычный набор иконок. */
+export type StaffRowActionKind = 'return' | 'rehire' | 'cancel-dismissal' | 'default';
+
+/**
+ * Действие строки решает её состояние, вкладка — только какие обработчики переданы. На «Все» строки разные:
+ * увольнение ставит excluded_from_timesheet = true, поэтому «Вернуть в табель» — только неуволенному, а уволенному —
+ * «Восстановить».
+ */
+export const staffRowActionKind = (
+  emp: Pick<Employee, 'employment_status' | 'excluded_from_timesheet' | 'dismissal_date'>,
+  handlers: { canReturn: boolean; canRehire: boolean; canCancelDismissal: boolean },
+): StaffRowActionKind => {
+  if (handlers.canReturn && emp.employment_status !== 'fired' && emp.excluded_from_timesheet) return 'return';
+  if (handlers.canRehire && emp.employment_status === 'fired') return 'rehire';
+  if (handlers.canCancelDismissal && emp.employment_status === 'active' && emp.dismissal_date) return 'cancel-dismissal';
+  return 'default';
+};
 export type ScheduleSource = 'employee' | 'default';
 
 export interface IEmployeeScheduleView {

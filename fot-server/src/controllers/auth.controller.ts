@@ -7,11 +7,9 @@ import { localAuthService, LocalAuthError } from '../services/local-auth.service
 import {
   DISABLED_ACCOUNT_CODE,
   DISABLED_ACCOUNT_ERROR,
-  DISMISSED_ACCOUNT_CODE,
-  DISMISSED_ACCOUNT_ERROR,
   getProfileAccessState,
-  getProfileEmploymentStatus,
-  isDismissedEmploymentStatus,
+  getProfileEmploymentBlock,
+  resolveEmploymentBlock,
 } from '../services/account-status.service.js';
 import { auditService } from '../services/audit.service.js';
 import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
@@ -302,6 +300,8 @@ async function buildProfileResponse(
     supervisor_brigade_ids,
     staff_tab_role_edit: staffTabFlags.roleEdit,
     can_grant_staff_tabs: staffTabFlags.canGrant,
+    // Кнопки «Перевести в неактивные» / «Вернуть в активные» (миграция 381): флаг учётки, не роль.
+    can_manage_staff_inactive: profile.can_manage_staff_inactive === true,
     is_weekend_responsible,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',
@@ -442,12 +442,13 @@ async function login(req: Request, res: Response): Promise<void> {
 
     const profile = profileRow;
 
-    // До сборки полного профиля: уволенному вход закрыт, строить ответ незачем.
-    if (isDismissedEmploymentStatus(await getProfileEmploymentStatus(profile.id))) {
+    // До сборки полного профиля: уволенному и неактивному (миграция 381) вход закрыт, строить ответ незачем.
+    const employmentBlock = await getProfileEmploymentBlock(profile.id);
+    if (employmentBlock) {
       res.status(403).json({
         success: false,
-        error: DISMISSED_ACCOUNT_ERROR,
-        code: DISMISSED_ACCOUNT_CODE,
+        error: employmentBlock.error,
+        code: employmentBlock.code,
       });
       return;
     }
@@ -735,28 +736,17 @@ async function refresh(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Refresh-токены живут 30 дней. Без этой сверки увольнение (token_version + 1)
-    // отзывало бы только access-токен, а старый refresh продолжал бы выпускать
-    // новые сессии.
-    //
-    // Токены, выпущенные до появления поля, приходят без него — такие НЕ отбиваем:
-    // на момент выкатки у 1245 профилей из 1915 token_version уже больше нуля
-    // (роль меняли), и нормализация отсутствующего поля в 0 разлогинила бы их всех
-    // разом. Сверяем только те токены, где версия действительно есть; старые
-    // доживают свои 30 дней, а уволенных отсекает проверка статуса ниже.
-    const decodedRefreshVersion = (decoded as { token_version?: number }).token_version;
-    if (Number.isFinite(decodedRefreshVersion)) {
-      const profileVersion = Number.isFinite(profileRow.token_version) ? Number(profileRow.token_version) : 0;
-      if (Number(decodedRefreshVersion) !== profileVersion) {
-        clearSessionCookies(res);
-        res.status(401).json({ success: false, error: 'Session is no longer valid' });
-        return;
-      }
+    // Блокировки — ДО сверки версии токена: перевод в неактивные и увольнение отзывают токены (token_version + 1),
+    // и без этого порядка человек получил бы 401 без причины вместо 403 с кодом, по которому клиент выходит.
+    const accessState = await getProfileAccessState(profileRow.id);
+    if (!accessState) {
+      clearSessionCookies(res);
+      res.status(401).json({ success: false, error: 'Session is no longer valid' });
+      return;
     }
 
     // Отключённой учётке (чёрный список) новую сессию не выдаём: без этого старый
     // refresh продолжал бы выпускать сессии в обход is_disabled.
-    const accessState = await getProfileAccessState(profileRow.id);
     if (accessState.isDisabled) {
       clearSessionCookies(res);
       res.status(403).json({
@@ -767,15 +757,35 @@ async function refresh(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Уволенному новую сессию не выдаём — иначе блокировка обходится обновлением токена.
-    if (isDismissedEmploymentStatus(await getProfileEmploymentStatus(profileRow.id))) {
+    // Уволенному и неактивному (миграция 381) новую сессию не выдаём — иначе блокировка обходится обновлением токена.
+    const employmentBlock = resolveEmploymentBlock(accessState);
+    if (employmentBlock) {
       clearSessionCookies(res);
       res.status(403).json({
         success: false,
-        error: DISMISSED_ACCOUNT_ERROR,
-        code: DISMISSED_ACCOUNT_CODE,
+        error: employmentBlock.error,
+        code: employmentBlock.code,
       });
       return;
+    }
+
+    // Refresh-токены живут 30 дней. Без этой сверки увольнение (token_version + 1)
+    // отзывало бы только access-токен, а старый refresh продолжал бы выпускать
+    // новые сессии.
+    //
+    // Токены, выпущенные до появления поля, приходят без него — такие НЕ отбиваем:
+    // на момент выкатки у 1245 профилей из 1915 token_version уже больше нуля
+    // (роль меняли), и нормализация отсутствующего поля в 0 разлогинила бы их всех
+    // разом. Сверяем только те токены, где версия действительно есть; старые
+    // доживают свои 30 дней, а уволенных и неактивных отсекает проверка статуса выше.
+    const decodedRefreshVersion = (decoded as { token_version?: number }).token_version;
+    if (Number.isFinite(decodedRefreshVersion)) {
+      const profileVersion = Number.isFinite(profileRow.token_version) ? Number(profileRow.token_version) : 0;
+      if (Number(decodedRefreshVersion) !== profileVersion) {
+        clearSessionCookies(res);
+        res.status(401).json({ success: false, error: 'Session is no longer valid' });
+        return;
+      }
     }
 
     const profile = profileRow;

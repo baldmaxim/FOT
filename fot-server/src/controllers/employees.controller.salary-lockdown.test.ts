@@ -239,7 +239,7 @@ describe('чтение — поля оклада не покидают БД', ()
     }
   });
 
-  it('view=staff отдаёт даты строками и признак Работает/Уволен/Декрет по дереву отделов', async () => {
+  it('view=staff отдаёт даты строками, признак Работает/Уволен/Неактивен и причину неактивности', async () => {
     deptTree.rows = [
       { id: 'su10', parent_id: null, name: '(СУ-10) ООО СУ-10' },
       { id: 'decret', parent_id: 'su10', name: 'Декрет' },
@@ -251,6 +251,7 @@ describe('чтение — поля оклада не покидают БД', ()
         { id: 1, full_name: 'Декретная', org_department_id: 'decret', employment_status: 'active', hire_date: '2024-01-15', birth_date: '1990-03-05', dismissal_date: null, total_count: 3 },
         { id: 2, full_name: 'Работник', org_department_id: 'vent', employment_status: 'active', hire_date: '2025-02-01', birth_date: null, dismissal_date: '2026-10-01', total_count: 3 },
         { id: 3, full_name: 'Уволенная', org_department_id: 'decret', employment_status: 'fired', hire_date: null, birth_date: null, dismissal_date: '2026-09-01', total_count: 3 },
+        { id: 4, full_name: 'Переведённый', org_department_id: 'vent', employment_status: 'active', hire_date: null, birth_date: null, dismissal_date: null, staff_inactive_at: new Date('2026-11-26T08:00:00Z'), total_count: 3 },
       ];
     });
     const res = makeRes();
@@ -262,10 +263,18 @@ describe('чтение — поля оклада не покидают БД', ()
     expect(select).toContain('hire_date, birth_date, dismissal_date');
     const rows = (res.body as { data: Array<Record<string, unknown>> }).data;
     expect(rows.map(r => [r.full_name, r.sign, r.birth_date, r.hire_date, r.dismissal_date])).toEqual([
-      ['Декретная', 'Декрет', '1990-03-05', '2024-01-15', null],
+      ['Декретная', 'Неактивен', '1990-03-05', '2024-01-15', null],
       ['Работник', 'Работает', null, '2025-02-01', '2026-10-01'],
       // Маппер в этом наборе замокан тождеством — hire_date доходит как есть.
       ['Уволенная', 'Уволен', null, null, '2026-09-01'],
+      ['Переведённый', 'Неактивен', null, null, null],
+    ]);
+    // Ручная метка — ISO-строкой, ветка «Декрет» — названием; у уволенного причины нет.
+    expect(rows.map(r => [r.staff_inactive_at ?? null, r.inactive_department_name])).toEqual([
+      [null, 'Декрет'],
+      [null, null],
+      [null, null],
+      ['2026-11-26T08:00:00.000Z', null],
     ]);
     deptTree.rows = [];
   });
