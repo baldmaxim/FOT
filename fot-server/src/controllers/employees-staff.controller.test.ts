@@ -377,7 +377,7 @@ describe('GET /employees/column-values — участок', () => {
   });
 });
 
-describe('группа плашки ?category= (ИТР / Рабочие / Остальные)', () => {
+describe('группа плашки ?category= (ИТР / Рабочие)', () => {
   const DEPARTMENTS_SQL = 'SELECT id, parent_id, name, kind FROM org_departments';
   const POSITIONS_SQL = 'SELECT id, name FROM positions';
   const exportRows = [
@@ -393,12 +393,12 @@ describe('группа плашки ?category= (ИТР / Рабочие / Ост
     h.buildStaffBaseFilter.mockImplementation(async () => ({ ...baseFilter(), category }));
   const mainCalls = () => h.query.mock.calls.filter(([sql]) => sql !== DEPARTMENTS_SQL && sql !== POSITIONS_SQL) as Array<[string, unknown[]]>;
 
-  it('parseStaffCategory: нет — null, три группы, остальное (в т.ч. повтор параметра) — ошибка', async () => {
+  it('parseStaffCategory: нет — null, две группы; «other» и прочее (в т.ч. повтор параметра) — ошибка', async () => {
     const { parseStaffCategory } = await import('./employees-staff-filter.helpers.js');
     expect(parseStaffCategory(undefined)).toEqual({ ok: true, value: null });
     expect(parseStaffCategory('')).toEqual({ ok: true, value: null });
-    for (const value of ['itr', 'worker', 'other'] as const) expect(parseStaffCategory(value)).toEqual({ ok: true, value });
-    for (const value of ['ITR', 'all', 'workers', ['itr'], ['itr', 'other'], 1]) expect(parseStaffCategory(value)).toEqual({ ok: false });
+    for (const value of ['itr', 'worker'] as const) expect(parseStaffCategory(value)).toEqual({ ok: true, value });
+    for (const value of ['other', 'ITR', 'all', 'workers', ['itr'], ['itr', 'worker'], 1]) expect(parseStaffCategory(value)).toEqual({ ok: false });
   });
 
   it('выгрузка «Все» с группой: условие группы в SQL, «Признак» есть, группа в имени файла и в аудите', async () => {
@@ -435,20 +435,22 @@ describe('группа плашки ?category= (ИТР / Рабочие / Ост
 
   it('разбивка группу не применяет: числа других групп не обнуляются', async () => {
     withCategory('worker');
-    mockQueries([{ total: 3, itr: 1, worker: 1, other: 1 }]);
+    mockQueries([{ total: 3, itr: 2, worker: 1 }]);
     const res = makeRes();
     await employeesStaffController.getCategoryCounts(makeReq({ status: 'working' }), res as unknown as Response);
 
-    expect(res.body).toEqual({ success: true, data: { total: 3, itr: 1, worker: 1, other: 1 } });
+    // other: 0 — для фронта прежней версии на время выкатки; групп две.
+    expect(res.body).toEqual({ success: true, data: { total: 3, itr: 2, worker: 1, other: 0 } });
     const [sql, params] = mainCalls()[0];
     expect(sql).toContain("count(*) FILTER (WHERE c.category = 'worker')");
+    expect(sql).not.toContain("'other'");
     expect(params).not.toContain('worker');
     // Категория строки — то же выражение, что у фильтра таблицы.
     expect(sql).toContain('category_dep');
   });
 
   it('чипы месяца и варианты фильтра столбца — с группой, условие после поиска по ФИО', async () => {
-    withCategory('other');
+    withCategory('worker');
     mockQueries([{ value: 'ПТО', count: 1 }]);
     h.queryOne.mockResolvedValue({ hired: 1, fired: 0 });
 
@@ -457,14 +459,14 @@ describe('группа плашки ?category= (ИТР / Рабочие / Ост
     expect(res.statusCode).toBe(200);
     const [movementSql, movementParams] = h.queryOne.mock.calls[0] as [string, unknown[]];
     expect(movementSql).toContain('category_dep');
-    expect(movementParams.at(-1)).toBe('other');
+    expect(movementParams.at(-1)).toBe('worker');
 
     res = makeRes();
     await employeesStaffController.getColumnValues(makeReq({ column: 'department' }), res as unknown as Response);
     expect(res.statusCode).toBe(200);
     const [valuesSql, valuesParams] = mainCalls().at(-1)!;
     expect(valuesSql).toContain('category_dep');
-    expect(valuesParams).toContain('other');
+    expect(valuesParams).toContain('worker');
   });
 });
 

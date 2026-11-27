@@ -15,8 +15,8 @@ interface ApiResponse<T> {
  */
 export type StaffApiStatus = 'active' | 'working' | 'fired' | 'all' | 'excluded';
 
-/** Группа плашки «Текущих сотрудников»: ИТР / Рабочие / Остальные (клик по группе фильтрует таблицу). */
-export type StaffCategory = 'itr' | 'worker' | 'other';
+/** Группа плашки «Текущих сотрудников»: ИТР / Рабочие, как группы «Расчётов» (клик по группе фильтрует таблицу). */
+export type StaffCategory = 'itr' | 'worker';
 
 export interface PaginatedParams {
   page: number;
@@ -70,7 +70,7 @@ export interface IStaffViewParams {
   sort?: StaffSortKey;
   dir?: StaffSortDir;
   cf?: string;
-  /** Группа плашки (ИТР / Рабочие / Остальные); не задана — все. Разбивке не передаётся. */
+  /** Группа плашки (ИТР / Рабочие); не задана — все. Разбивке не передаётся. */
   category?: StaffCategory;
   /** Только выгрузка: видимые столбцы; [] — только «№», «ФИО» (и «Признак» во «Все»); не задан — прежний набор. */
   columns?: readonly StaffTableColumn[];
@@ -88,12 +88,11 @@ export interface IStaffColumnValues {
   truncated: boolean;
 }
 
-/** Разбивка таблицы на ИТР / Рабочие / Остальные (плашка в шапке). itr + worker + other = total. */
+/** Разбивка таблицы на ИТР / Рабочие (плашка в шапке). itr + worker = total. */
 export interface IStaffCategoryCounts {
   total: number;
   itr: number;
   worker: number;
-  other: number;
 }
 
 export interface IStaffMonthMovement {
@@ -328,8 +327,8 @@ export const employeeService = {
   },
 
   /**
-   * ИТР / Рабочие / Остальные по тем же фильтрам, что у таблицы (статус и период — тоже). Выбранная группа не
-   * передаётся: иначе две другие кнопки показали бы нули.
+   * ИТР / Рабочие по тем же фильтрам, что у таблицы (статус и период — тоже). Выбранная группа не
+   * передаётся: иначе другая кнопка показала бы ноль.
    */
   async getCategoryCounts(
     params: Omit<IStaffViewParams, 'sort' | 'dir' | 'columns' | 'category'>,

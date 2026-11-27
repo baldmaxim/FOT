@@ -254,6 +254,20 @@ export const formatPaidPeriod = (months: PayrollPaidMonths): string => (
   months === 'all' || months.length === 0 ? 'весь период' : formatMonthsLabel(months)
 );
 
+/**
+ * Подпись «Уволен ДД.ММ.ГГГГ» под ФИО уволенного (27.11.2026). На «Расчётах» — только с месяца увольнения: дата
+ * увольнения не позже последнего выбранного месяца (сентябрь, уволен 26.10 — без подписи). Без месяцев («Условия
+ * оплаты», «Подробно»), «весь период» или дата неизвестна — подпись есть, как раньше.
+ */
+export const isDismissedMarkShown = (
+  dismissalDate: string | null | undefined,
+  months: PayrollPaidMonths | null | undefined,
+): boolean => {
+  if (!dismissalDate || !months || months === 'all' || months.length === 0) return true;
+  const lastMonth = months.reduce((last, month) => (month > last ? month : last));
+  return dismissalDate.slice(0, 7) <= lastMonth;
+};
+
 /** «К выплате» — начислено минус удержано, как в «Своде»; null — сумм нет ни в одном разделе. */
 export const paidPayout = (totals: PayrollPaidTotals): number | null => (
   totals.accrued === null && totals.deducted === null

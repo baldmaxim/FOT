@@ -59,7 +59,6 @@ export const staffSignVisible = (filter: StaffStatusFilter): boolean => filter =
 export const STAFF_CATEGORY_OPTIONS: ReadonlyArray<{ key: StaffCategory; label: string }> = [
   { key: 'itr', label: 'ИТР' },
   { key: 'worker', label: 'Рабочие' },
-  { key: 'other', label: 'Остальные' },
 ];
 
 /** Значение ?category= в адресе экрана; неизвестное — без группы. */

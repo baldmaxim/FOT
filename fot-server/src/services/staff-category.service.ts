@@ -1,36 +1,31 @@
 /**
- * Разбивка таблицы «Текущие сотрудники» на ИТР / Рабочие / Остальные (плашка в шапке, решение 26.11.2026).
- *
- * Правило — по должности, на тех же источниках, что группы «Расчётов» (payroll-department-groups.ts):
- *  1. отдел в бригадах (раздел «Бригады», СУ-10 и СМ) — «Рабочие», какой бы ни была должность;
- *  2. иначе должность ИТР (isItrPositionName — тот же список, что в «Расчётах») — «ИТР»;
- *  3. иначе отдел СМ — «Рабочие» (как в «Расчётах»: в СМ вне бригад делят по должности);
- *  4. остальное — «Остальные»: коменданты, курьеры, операторы, без должности, подрядчики без ИТР-должности.
+ * Разбивка таблицы «Текущие сотрудники» на ИТР / Рабочие (плашка в шапке). Решение 27.11.2026: только две группы и
+ * то же правило, что у групп «Расчётов» (payrollDepartmentGroupIds, payroll-department-groups.ts) — человек в одной
+ * группе на обоих экранах:
+ *  1. отдел-бригада (раздел «Бригады», СУ-10 и СМ) — «Рабочие», какой бы ни была должность;
+ *  2. ЛИНИЯ и остальные отделы СУ-10 — «ИТР», какой бы ни была должность (курьеры, коменданты, операторы — тоже);
+ *  3. иначе (СМ вне бригад, подрядные, прочие, без отдела) — по должности: isItrPositionName — «ИТР», иначе «Рабочие».
  *
  * Отдел уволенного — до увольнения (effectiveDepartmentSql), как у фильтра раздела. Должность — текущая в карточке.
  */
 import { query } from '../config/postgres.js';
-import {
-  effectiveDepartmentSql,
-  listSectionDepartmentIds,
-  type IExportDepartmentRow,
-} from './employees-export.service.js';
-import { isItrPositionName } from './payroll/payroll-department-groups.js';
+import { effectiveDepartmentSql, type IExportDepartmentRow } from './employees-export.service.js';
+import { isItrPositionName, payrollDepartmentGroupIds } from './payroll/payroll-department-groups.js';
 
-export type StaffCategory = 'itr' | 'worker' | 'other';
+export type StaffCategory = 'itr' | 'worker';
 
-/** Группы плашки в порядке экрана; значение параметра category (клик по группе, решение 27.11.2026). */
-export const STAFF_CATEGORIES: readonly StaffCategory[] = ['itr', 'worker', 'other'];
+/** Группы плашки в порядке экрана; значение параметра category (клик по группе). */
+export const STAFF_CATEGORIES: readonly StaffCategory[] = ['itr', 'worker'];
 
 export const isStaffCategory = (value: unknown): value is StaffCategory =>
   typeof value === 'string' && (STAFF_CATEGORIES as readonly string[]).includes(value);
 
 export interface IStaffCategorySources {
-  /** Отделы раздела «Бригады» (СУ-10 и СМ). */
-  brigadeDepartmentIds: string[];
-  /** Отделы СМ вне бригад. */
-  smDepartmentIds: string[];
-  /** Должности справочника с ИТР-названием. */
+  /** Бригады (раздел «Бригады», СУ-10 и СМ) — «Рабочие» при любой должности. */
+  workerDepartmentIds: string[];
+  /** ЛИНИЯ и остальные отделы СУ-10 — «ИТР» при любой должности. */
+  itrDepartmentIds: string[];
+  /** Должности справочника с ИТР-названием — для остальных отделов. */
   itrPositionIds: string[];
 }
 
@@ -38,9 +33,10 @@ export function buildStaffCategorySources(
   departments: IExportDepartmentRow[],
   positions: ReadonlyArray<{ id: string; name: string | null }>,
 ): IStaffCategorySources {
+  const groups = payrollDepartmentGroupIds(departments);
   return {
-    brigadeDepartmentIds: listSectionDepartmentIds(departments, 'brigades'),
-    smDepartmentIds: listSectionDepartmentIds(departments, 'sm'),
+    workerDepartmentIds: groups.worker,
+    itrDepartmentIds: groups.itr,
     itrPositionIds: positions.filter(position => isItrPositionName(position.name)).map(position => position.id),
   };
 }
@@ -57,7 +53,7 @@ export async function loadStaffCategorySources(): Promise<IStaffCategorySources>
 /**
  * Категория строки: CASE над отделом departmentExpr и должностью alias.position_id. Параметры дописываются в params.
  * departmentExpr — колонка с уже посчитанным отделом (см. staffCategoryRowSql), чтобы подзапрос отдела уволенного
- * не считался дважды.
+ * не считался дважды. Без отдела (NULL) — по должности. Третьей группы нет: ELSE — «Рабочие».
  */
 export function staffCategoryCaseSql(
   alias: string,
@@ -65,17 +61,17 @@ export function staffCategoryCaseSql(
   params: unknown[],
   sources: IStaffCategorySources,
 ): string {
-  params.push(sources.brigadeDepartmentIds);
-  const brigadeIdx = params.length;
+  params.push(sources.workerDepartmentIds);
+  const workerIdx = params.length;
+  params.push(sources.itrDepartmentIds);
+  const itrDeptIdx = params.length;
   params.push(sources.itrPositionIds);
-  const itrIdx = params.length;
-  params.push(sources.smDepartmentIds);
-  const smIdx = params.length;
+  const itrPosIdx = params.length;
   return `(CASE
-            WHEN ${departmentExpr} = ANY($${brigadeIdx}::uuid[]) THEN 'worker'
-            WHEN ${alias}.position_id = ANY($${itrIdx}::uuid[]) THEN 'itr'
-            WHEN ${departmentExpr} = ANY($${smIdx}::uuid[]) THEN 'worker'
-            ELSE 'other'
+            WHEN ${departmentExpr} = ANY($${workerIdx}::uuid[]) THEN 'worker'
+            WHEN ${departmentExpr} = ANY($${itrDeptIdx}::uuid[]) THEN 'itr'
+            WHEN ${alias}.position_id = ANY($${itrPosIdx}::uuid[]) THEN 'itr'
+            ELSE 'worker'
           END)`;
 }
 
@@ -105,12 +101,16 @@ export interface IStaffCategoryCounts {
   total: number;
   itr: number;
   worker: number;
-  other: number;
+  /**
+   * Всегда 0: группы «Остальные» больше нет. Поле — для фронта прежней версии, пока выкатывается новый
+   * (бэкенд → фронтенд); убрать после выкатки.
+   */
+  other: 0;
 }
 
 /**
- * Счётчики по готовому WHERE фильтра кадров (таблица employees без алиаса — как в списке). Сумма трёх категорий
- * равна total: CASE даёт ровно одну категорию на строку.
+ * Счётчики по готовому WHERE фильтра кадров (таблица employees без алиаса — как в списке). itr + worker = total:
+ * CASE даёт ровно одну группу на строку.
  */
 export async function countStaffCategories(
   whereParts: string[],
@@ -120,11 +120,10 @@ export async function countStaffCategories(
   const categoryParams = [...params];
   const categorySql = staffCategoryRowSql('employees', categoryParams, sources);
   const where = whereParts.length > 0 ? whereParts.join(' AND ') : 'TRUE';
-  const rows = await query<{ total: number | string; itr: number | string; worker: number | string; other: number | string }>(
+  const rows = await query<{ total: number | string; itr: number | string; worker: number | string }>(
     `SELECT count(*)::int AS total,
             count(*) FILTER (WHERE c.category = 'itr')::int AS itr,
-            count(*) FILTER (WHERE c.category = 'worker')::int AS worker,
-            count(*) FILTER (WHERE c.category = 'other')::int AS other
+            count(*) FILTER (WHERE c.category = 'worker')::int AS worker
        FROM (
          SELECT ${categorySql} AS category
            FROM employees
@@ -137,6 +136,6 @@ export async function countStaffCategories(
     total: Number(row?.total ?? 0),
     itr: Number(row?.itr ?? 0),
     worker: Number(row?.worker ?? 0),
-    other: Number(row?.other ?? 0),
+    other: 0,
   };
 }

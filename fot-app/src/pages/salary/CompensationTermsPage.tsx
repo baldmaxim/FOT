@@ -441,6 +441,7 @@ export const CompensationTermsPage: FC<ICompensationTermsPageProps> = ({
             onOpenFilter={handleOpenFilter}
             accrualMonths={accrualMonths}
             paidPeriod={paidPeriod}
+            paidMonths={isCalcScreen ? shownPaidMonths : undefined}
             onOpenPaidItems={onOpenPaidItems ? handleOpenPaidItems : undefined}
             onOpenCardPayouts={onOpenCardPayouts ? handleOpenCardPayouts : undefined}
             expandedColumns={isCalcScreen ? expandedColumns : undefined}

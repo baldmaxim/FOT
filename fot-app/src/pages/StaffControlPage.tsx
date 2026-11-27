@@ -1518,7 +1518,7 @@ export const StaffControlPage: FC = () => {
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
   const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => parseStaffStatusFilter(urlParams.get('status')));
-  // Группа плашки (ИТР / Рабочие / Остальные): клик по ней оставляет в таблице только её; null — все.
+  // Группа плашки (ИТР / Рабочие): клик по ней оставляет в таблице только её; null — все.
   const [category, setCategory] = useState<StaffCategory | null>(() => parseStaffCategoryParam(urlParams.get('category')));
   // «Признак» — только во «Все».
   const showSign = staffSignVisible(statusFilter);
@@ -2725,8 +2725,8 @@ export const StaffControlPage: FC = () => {
     return items;
   }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetOffice]);
 
-  // ИТР / Рабочие / Остальные (миграция 381) — те же фильтры, статус и период, что у таблицы, но без выбранной группы:
-  // иначе две другие кнопки показали бы нули. Показываем только числа ровно этого набора (ключ фильтров сверен),
+  // ИТР / Рабочие (миграция 381) — те же фильтры, статус и период, что у таблицы, но без выбранной группы:
+  // иначе другая кнопка показала бы ноль. Показываем только числа ровно этого набора (ключ фильтров сверен),
   // а сверку с числом строк таблицы — resolveStaffCategoryDisplay.
   const categoryCountsParams = {
     section,

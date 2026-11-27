@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Статус «Неактивный» и разбивка ИТР / Рабочие / Остальные на настоящем PostgreSQL (миграция 381):
+// Статус «Неактивный» и разбивка ИТР / Рабочие на настоящем PostgreSQL (миграция 381):
 //  - миграция 381 идемпотентна, staff_inactive_by — ON DELETE SET NULL;
 //  - «Активные» (working) без «Декрета»/«Архива» (и вложенных) и ручной метки; сотрудник без отдела — в «Активных»;
-//  - разбивка: сумма категорий = total списка для working / all / fired, категории — по правилу (бригада, ИТР, СМ);
+//  - разбивка: ИТР + Рабочие = total списка для working / all / fired, группы — по правилу «Расчётов» (бригада → Рабочие,
+//    отделы СУ-10 → ИТР, иначе по должности);
 //  - признак, фасет и фильтр «Признака»; причина неактивности в строке;
 //  - статус входа (account-status) по реальному SQL; перевод и возврат: условный UPDATE, отзыв токенов кроме служебной
 //    учётки, отказы 409, гонка двух возвратов.
@@ -166,7 +167,7 @@ const counts = async (status: string, extra: Record<string, string> = {}) => {
 
 const ids = (rows: ListRow[]) => rows.map(row => row.id).sort((a, b) => a - b);
 
-describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / Рабочие / Остальные на PostgreSQL', () => {
+describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / Рабочие на PostgreSQL', () => {
   beforeAll(async () => {
     await q(`
       DROP TABLE IF EXISTS employee_staff_comments, employees, org_departments, positions, user_profiles,
@@ -365,15 +366,17 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
     expect(rows.get(13)).toMatchObject({ sign: 'Работает' });
   });
 
-  it('разбивка: сумма = total списка; категории по правилу (бригада → Рабочие, ИТР-должность, СМ → Рабочие)', async () => {
-    expect(await counts('working')).toEqual({ total: 8, itr: 3, worker: 3, other: 2 });
-    // «Все»: + Декретная-инженер (ИТР), вложенная-маляр и комендант «Архива» (Остальные), переведённый (ИТР),
+  it('разбивка: ИТР + Рабочие = total списка; группы как в «Расчётах» (бригада → Рабочие, СУ-10 → ИТР, иначе по должности)', async () => {
+    // «Активные»: ИТР — ПТО (инженер, комендант, без должности), «Инженер СМ», без отдела-инженер; Рабочие — бригада
+    // (маляр и инженер), «Водитель СМ». other: 0 — поле для фронта прежней версии.
+    expect(await counts('working')).toEqual({ total: 8, itr: 5, worker: 3, other: 0 });
+    // «Все»: + «Декрет» (инженер и вложенный маляр), комендант «Архива», переведённый — ИТР (отделы СУ-10);
     // уволенный из бригады — по отделу до увольнения (Рабочие).
-    expect(await counts('all')).toEqual({ total: 13, itr: 5, worker: 4, other: 4 });
+    expect(await counts('all')).toEqual({ total: 13, itr: 9, worker: 4, other: 0 });
     expect(await counts('fired')).toEqual({ total: 1, itr: 0, worker: 1, other: 0 });
     for (const status of ['working', 'all', 'fired']) {
       const c = await counts(status);
-      expect(c.itr + c.worker + c.other, status).toBe(c.total);
+      expect(c.itr + c.worker, status).toBe(c.total);
       expect(c.total, status).toBe((await listAll(status)).meta.total);
     }
   });
@@ -388,7 +391,7 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
     ]);
     const cf = JSON.stringify({ values: { sign: ['Неактивен'] } });
     expect(ids((await listAll('all', { cf })).data)).toEqual([8, 9, 10, 11]);
-    expect(await counts('all', { cf })).toEqual({ total: 4, itr: 2, worker: 0, other: 2 });
+    expect(await counts('all', { cf })).toEqual({ total: 4, itr: 4, worker: 0, other: 0 });
   });
 
   it('возврат: два одновременных — один 200, второй 409; токены после возврата не откатываются', async () => {
@@ -416,9 +419,9 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
     expect(ids((await listAll('working')).data)).not.toContain(9);
   });
 
-  // Клик по ИТР / Рабочие / Остальные (27.11.2026): таблица показывает ровно столько строк, сколько на кнопке.
+  // Клик по ИТР / Рабочие (27.11.2026): таблица показывает ровно столько строк, сколько на кнопке.
   describe('группа плашки ?category=', () => {
-    const CATEGORIES = ['itr', 'worker', 'other'] as const;
+    const CATEGORIES = ['itr', 'worker'] as const;
 
     const callPage = async (query: Record<string, string>) => {
       const res = makeRes();
@@ -443,12 +446,31 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
       }
     });
 
-    it('группы по правилу: уволенный из бригады — «Рабочие» по отделу до увольнения, без должности — «Остальные»', async () => {
+    it('группы по правилу «Расчётов»: бригада → Рабочие при любой должности, СУ-10 → ИТР при любой, иначе по должности', async () => {
       expect(ids((await listAll('fired', { category: 'worker' })).data)).toEqual([12]);
       expect(ids((await listAll('fired', { category: 'itr' })).data)).toEqual([]);
+      // Рабочие: маляр и инженер бригады, водитель СМ.
       expect(ids((await listAll('working', { category: 'worker' })).data)).toEqual([4, 5, 6]);
-      expect(ids((await listAll('working', { category: 'other' })).data)).toEqual([2, 3]);
-      expect(ids((await listAll('working', { category: 'itr' })).data)).toEqual([1, 7, 11, 13]);
+      // ИТР: ПТО (инженер, комендант, без должности, переведённый), инженер СМ, без отдела — инженер.
+      expect(ids((await listAll('working', { category: 'itr' })).data)).toEqual([1, 2, 3, 7, 11, 13]);
+    });
+
+    it('подрядные: без должности и с рабочей — Рабочие, с ИТР-должностью — ИТР', async () => {
+      const CONTRACTORS = dep(12);
+      await q('INSERT INTO org_departments (id, parent_id, name) VALUES ($1, $2, \'Подрядные организации\')', [CONTRACTORS, ROOT]);
+      await q(`INSERT INTO employees (id, full_name, org_department_id, position_id) VALUES
+        (21, 'Подрядчик без должности', $1, NULL), (22, 'Подрядчик маляр', $1, $2), (23, 'Подрядчик инженер', $1, $3)`,
+      [CONTRACTORS, PAINTER, ENGINEER]);
+      try {
+        const contractors = (rows: ListRow[]) => ids(rows).filter(id => id >= 21);
+        expect(contractors((await listAll('working', { category: 'worker' })).data)).toEqual([21, 22]);
+        expect(contractors((await listAll('working', { category: 'itr' })).data)).toEqual([23]);
+        const c = await counts('working');
+        expect(c.itr + c.worker).toBe(c.total);
+      } finally {
+        await q('DELETE FROM employees WHERE id BETWEEN 21 AND 23');
+        await q('DELETE FROM org_departments WHERE id = $1', [CONTRACTORS]);
+      }
     });
 
     it('тот же набор в курсорном режиме с сортировкой и в режиме view=list (массовый график по фильтру)', async () => {
@@ -465,7 +487,7 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
     });
 
     it('неверная группа — 400 INVALID_CATEGORY у списка и разбивки', async () => {
-      for (const category of ['ITR', 'all', 'workers']) {
+      for (const category of ['other', 'ITR', 'all', 'workers']) {
         const page = await callPage({ page: '1', pageSize: '50', view: 'staff', status: 'working', category });
         expect(page.statusCode, category).toBe(400);
         expect(page.body).toMatchObject({ code: 'INVALID_CATEGORY' });
@@ -511,14 +533,16 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
         expect(await movement()).toEqual({ hired: 3, fired: 1 });
         expect(await movement('itr')).toEqual({ hired: 1, fired: 0 });
         expect(await movement('worker')).toEqual({ hired: 2, fired: 1 });
-        expect(await movement('other')).toEqual({ hired: 0, fired: 0 });
+        const otherRes = makeRes();
+        await employeesStaffController.getMonthMovement(makeReq({ category: 'other' }), otherRes as unknown as Response);
+        expect(otherRes.statusCode).toBe(400);
 
         const res = makeRes();
-        // «Остальные» во «Все»: комендант и без должности работают, «Декрет»-маляр и «Архив» — неактивны.
-        await employeesStaffController.getColumnValues(makeReq({ column: 'sign', status: 'all', category: 'other' }), res as unknown as Response);
+        // ИТР во «Все»: работают ПТО, инженер СМ, переведённый и без отдела; «Декрет» и «Архив» — неактивны.
+        await employeesStaffController.getColumnValues(makeReq({ column: 'sign', status: 'all', category: 'itr' }), res as unknown as Response);
         expect((res.body as { data: { values: Array<{ value: string; count: number }> } }).data.values).toEqual([
-          { value: 'Неактивен', count: 2 },
-          { value: 'Работает', count: 2 },
+          { value: 'Неактивен', count: 3 },
+          { value: 'Работает', count: 6 },
         ]);
       } finally {
         await q('UPDATE employees SET hire_date = NULL, dismissal_date = NULL WHERE id = ANY($1::int[])', [[1, 4, 6, 12]]);

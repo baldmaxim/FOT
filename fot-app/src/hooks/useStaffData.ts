@@ -38,7 +38,7 @@ interface IUseStaffDataParams {
   period?: StaffPeriod;
   /** Сериализованные фильтры столбцов ('' — нет). */
   cf?: string;
-  /** Группа плашки (ИТР / Рабочие / Остальные); не задана — все. */
+  /** Группа плашки (ИТР / Рабочие); не задана — все. */
   category?: StaffCategory;
   /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
   enabled?: boolean;
@@ -123,7 +123,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
       queryClient.invalidateQueries({ queryKey: employeeCountsQueryKey(false) }),
       // Приём, увольнение, восстановление меняют чипы «с начала месяца».
       queryClient.invalidateQueries({ queryKey: STAFF_MONTH_MOVEMENT_QUERY_KEY }),
-      // Приём, увольнение, перевод в неактивные меняют разбивку ИТР / Рабочие / Остальные.
+      // Приём, увольнение, перевод в неактивные меняют разбивку ИТР / Рабочие.
       queryClient.invalidateQueries({ queryKey: STAFF_CATEGORY_COUNTS_QUERY_KEY }),
     ]);
   }, [employeesQueryKey, queryClient]);

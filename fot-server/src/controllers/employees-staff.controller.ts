@@ -62,7 +62,7 @@ const SECTION_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   active: 'Действующие', working: 'Активные', fired: 'Уволенные', all: 'Все', excluded: 'Исключённые',
 };
-const CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'ИТР', worker: 'Рабочие', other: 'Остальные' };
+const CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'ИТР', worker: 'Рабочие' };
 
 const formatFileDay = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
@@ -289,7 +289,7 @@ export const employeesStaffController = {
   },
 
   /**
-   * GET /api/employees/category-counts — разбивка таблицы на ИТР / Рабочие / Остальные (плашка в шапке).
+   * GET /api/employees/category-counts — разбивка таблицы на ИТР / Рабочие (плашка в шапке).
    * WHERE собирается в том же порядке, что у списка (respondEmployeesPage): база → статус → период → фильтры
    * столбцов → поиск по ФИО, поэтому total равен числу строк вкладки, а сумма категорий — total.
    * Выбранную группу (?category=) разбивка не применяет: иначе две другие кнопки показали бы нули. Список с группой
@@ -330,7 +330,7 @@ export const employeesStaffController = {
       res.json({ success: true, data: counts });
     } catch (error) {
       console.error('Get staff category counts error:', error);
-      res.status(500).json({ success: false, error: 'Не удалось посчитать ИТР / Рабочие / Остальные' });
+      res.status(500).json({ success: false, error: 'Не удалось посчитать ИТР / Рабочие' });
     }
   },
 

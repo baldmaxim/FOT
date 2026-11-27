@@ -13,7 +13,7 @@ interface IStaffCategoryCountsProps {
 }
 
 /**
- * «Все 1151 · ИТР 557 · Рабочие 582 · Остальные 12»: «Все» — вся вкладка, клик по группе оставляет в таблице
+ * «Все 1151 · ИТР 569 · Рабочие 582»: «Все» — вся вкладка, клик по группе оставляет в таблице
  * только её. Выбранная кнопка подсвечена; без группы подсвечено «Все». Подсказок при наведении нет (27.11.2026):
  * выбор виден подсветкой.
  */
@@ -26,7 +26,7 @@ export const StaffCategoryCounts: FC<IStaffCategoryCountsProps> = memo(({ counts
     <span
       className={`sc-category-counts sc-category-counts--${variant}`}
       role="group"
-      aria-label="Состав таблицы: ИТР, рабочие, остальные"
+      aria-label="Состав таблицы: ИТР и рабочие"
     >
       <button
         type="button"

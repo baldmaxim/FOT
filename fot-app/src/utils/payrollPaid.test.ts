@@ -7,6 +7,7 @@ import {
   formatAsOfDay,
   formatPaidAmount,
   formatPaidPeriod,
+  isDismissedMarkShown,
   paidAmountMonths,
   paidCellKey,
   paidHistory,
@@ -452,5 +453,29 @@ describe('месяцы «Расчётов»: 1С, расчёт ФОТ и вед�
     expect(selectable).toBeNull();
     expect(options).toEqual([...input.windowMonths].reverse());
     expect(defaultMonth).toBe('2026-09');
+  });
+});
+
+describe('подпись «Уволен» на «Расчётах» — только с месяца увольнения (27.11.2026)', () => {
+  it('сентябрь: уволен 26.10 и 23.11 — без подписи, уволен 16.09 — с подписью', () => {
+    expect(isDismissedMarkShown('2026-10-26', ['2026-09'])).toBe(false);
+    expect(isDismissedMarkShown('2026-11-23', ['2026-09'])).toBe(false);
+    expect(isDismissedMarkShown('2026-09-16', ['2026-09'])).toBe(true);
+    expect(isDismissedMarkShown('2026-09-30', ['2026-09'])).toBe(true);
+  });
+
+  it('октябрь и позже: уволенный в октябре — с подписью; несколько месяцев — по последнему', () => {
+    expect(isDismissedMarkShown('2026-10-26', ['2026-10'])).toBe(true);
+    expect(isDismissedMarkShown('2026-10-26', ['2026-11'])).toBe(true);
+    expect(isDismissedMarkShown('2026-10-26', ['2026-10', '2026-08', '2026-09'])).toBe(true);
+    expect(isDismissedMarkShown('2026-11-23', ['2026-08', '2026-09', '2026-10'])).toBe(false);
+  });
+
+  it('«весь период», без месяцев («Условия оплаты», «Подробно») или дата неизвестна — подпись, как раньше', () => {
+    expect(isDismissedMarkShown('2026-11-23', 'all')).toBe(true);
+    expect(isDismissedMarkShown('2026-11-23', [])).toBe(true);
+    expect(isDismissedMarkShown('2026-11-23', null)).toBe(true);
+    expect(isDismissedMarkShown('2026-11-23', undefined)).toBe(true);
+    expect(isDismissedMarkShown(null, ['2026-09'])).toBe(true);
   });
 });

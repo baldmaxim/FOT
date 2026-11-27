@@ -6,6 +6,7 @@ import {
   CONTRACT_TYPE_LABELS,
   type IPayrollColumnFilters,
   type IPayrollTermsRow,
+  type PayrollPaidMonths,
   type PayrollSortDir,
   type PayrollSortKey,
 } from '../../services/payrollService';
@@ -19,7 +20,7 @@ import { formatDate } from '../../utils/formatMoney';
 import { cx } from '../../utils/motion';
 import { isPayrollColumnFilterActive, isPayrollGphRow } from '../../utils/payrollColumnFilters';
 import { isSortablePayrollColumn, type PayrollTableColumn, type PayrollTableColumns } from '../../utils/payrollColumns';
-import type { PayrollPaidTotalKind } from '../../utils/payrollPaid';
+import { isDismissedMarkShown, type PayrollPaidTotalKind } from '../../utils/payrollPaid';
 import {
   colClassOf,
   formatMonthly,
@@ -65,6 +66,8 @@ interface IPayrollTermsTableProps {
   accrualMonths: string[];
   /** Период сумм «Расчётов» — тех, что пришли в строках. */
   paidPeriod?: string;
+  /** Месяцы сумм «Расчётов» тех же строк: подпись «Уволен» — только с месяца увольнения. Нет — подпись всегда. */
+  paidMonths?: PayrollPaidMonths | null;
   /** Клик по сумме «Удержания (1С)»: окно со статьями; trigger — куда вернуть фокус. */
   onOpenPaidItems?: (row: IPayrollTermsRow, kind: PayrollPaidTotalKind, trigger: HTMLButtonElement) => void;
   /** Клик по «Выплатам на карту (1С)»: окно ведомостей сотрудника; trigger — куда вернуть фокус. */
@@ -115,6 +118,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
   onOpenFilter,
   accrualMonths,
   paidPeriod,
+  paidMonths,
   onOpenPaidItems,
   onOpenCardPayouts,
   expandedColumns = NO_EXPANDED,
@@ -450,7 +454,7 @@ export const PayrollTermsTable: FC<IPayrollTermsTableProps> = memo(({
                       {isPayrollGphRow(row) && (
                         <span className={styles.contractMark}>{CONTRACT_TYPE_LABELS.gph}</span>
                       )}
-                      {row.employment_status === 'fired' && (
+                      {row.employment_status === 'fired' && isDismissedMarkShown(row.dismissal_date, paidMonths) && (
                         <span className={styles.dismissedMark}>
                           {row.dismissal_date ? `Уволен ${formatDate(row.dismissal_date)}` : 'Уволен'}
                         </span>
