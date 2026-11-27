@@ -7,7 +7,7 @@
  */
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleType } from '../types/schedule';
-import type { IStaffCategoryCounts, StaffApiStatus, StaffCategory } from '../services/employeeService';
+import type { IStaffCategoryCounts, StaffApiStatus, StaffCategory, StaffPeriod } from '../services/employeeService';
 import type { Employee } from '../types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -27,6 +27,30 @@ export const parseStaffStatusFilter = (value: string | null): StaffStatusFilter 
  */
 export const toApiStaffStatus = (filter: StaffStatusFilter): StaffApiStatus =>
   filter === 'active' ? 'working' : filter;
+
+/** Вкладка, чип «с начала месяца» и вкладка, на которую вернуть при отжатии чипа. */
+export interface IStaffPeriodState {
+  status: StaffStatusFilter;
+  period: StaffPeriod | null;
+  /** Вкладка до первого нажатого чипа; null — не запомнена (чип пришёл из ссылки или не нажат). */
+  returnStatus: StaffStatusFilter | null;
+}
+
+/**
+ * Клик по чипу «Устроены» / «Уволены» (27.11.2026). Чип — временный фильтр поверх вкладки: нажатие переключает на
+ * свою вкладку («Устроены» — «Активные», «Уволены» — «Уволенные»), отжатие возвращает на вкладку, с которой нажали
+ * первый чип (переход между чипами её не меняет); не запомнена — «Активные».
+ */
+export const toggleStaffPeriod = (state: IStaffPeriodState, next: StaffPeriod): IStaffPeriodState => {
+  if (state.period === next) {
+    return { status: state.returnStatus ?? 'active', period: null, returnStatus: null };
+  }
+  return {
+    status: next === 'hired_month' ? 'active' : 'fired',
+    period: next,
+    returnStatus: state.period === null ? state.status : state.returnStatus,
+  };
+};
 
 /** «Признак» на экране и в выгрузке — только во «Все»: на «Активных» и «Уволенных» он у всех одинаковый. */
 export const staffSignVisible = (filter: StaffStatusFilter): boolean => filter === 'all';

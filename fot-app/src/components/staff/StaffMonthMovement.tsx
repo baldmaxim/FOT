@@ -14,7 +14,10 @@ const MONTHS_GENITIVE = ['января', 'февраля', 'марта', 'апр
 const monthLabel = (monthStart: string): string =>
   `С 1 ${MONTHS_GENITIVE[Number(monthStart.slice(5, 7)) - 1] ?? ''} ${monthStart.slice(0, 4)}`;
 
-/** Чипы «Устроены +N / Уволены −N» с начала месяца; клик показывает этих сотрудников. */
+/**
+ * Чипы «Устроены +N / Уволены −N» с начала месяца; клик показывает этих сотрудников, повторный — возвращает на вкладку,
+ * с которой нажали (toggleStaffPeriod). У нажатого чипа подсказки нет: куда вернёт, зависит от прежней вкладки.
+ */
 export const StaffMonthMovement: FC<IStaffMonthMovementProps> = memo(({ data, isError, period, onToggle }) => {
   if (isError) return <span className="sc-movement sc-muted" title="Не удалось посчитать">С начала месяца: —</span>;
   const hired = data?.hired;
@@ -28,7 +31,7 @@ export const StaffMonthMovement: FC<IStaffMonthMovementProps> = memo(({ data, is
         aria-pressed={period === 'hired_month'}
         onClick={() => onToggle('hired_month')}
         disabled={!data}
-        title={period === 'hired_month' ? 'Показать всех действующих' : 'Показать устроенных с начала месяца'}
+        title={period === 'hired_month' ? undefined : 'Показать устроенных с начала месяца'}
       >
         Устроены <strong>+{hired ?? '…'}</strong>
       </button>
@@ -38,7 +41,7 @@ export const StaffMonthMovement: FC<IStaffMonthMovementProps> = memo(({ data, is
         aria-pressed={period === 'fired_month'}
         onClick={() => onToggle('fired_month')}
         disabled={!data}
-        title={period === 'fired_month' ? 'Показать всех уволенных' : 'Показать уволенных с начала месяца'}
+        title={period === 'fired_month' ? undefined : 'Показать уволенных с начала месяца'}
       >
         Уволены <strong>−{fired ?? '…'}</strong>
       </button>

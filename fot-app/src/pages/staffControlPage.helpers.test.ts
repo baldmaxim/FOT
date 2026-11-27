@@ -7,6 +7,8 @@ import {
   staffRowActionKind,
   staffSignVisible,
   toApiStaffStatus,
+  toggleStaffPeriod,
+  type IStaffPeriodState,
 } from './staffControlPage.helpers';
 
 describe('addIsoDays', () => {
@@ -118,5 +120,43 @@ describe('группа плашки: ?category= и что показать', () 
   it('разбивки ровно этих фильтров нет — только число таблицы', () => {
     expect(resolveStaffCategoryDisplay({ counts: null, total: 557, category: 'itr', listSettling: false }))
       .toEqual({ counts: null, stale: false });
+  });
+});
+
+describe('чипы «Устроены / Уволены»: отжатие возвращает на прежнюю вкладку (27.11.2026)', () => {
+  const state = (status: IStaffPeriodState['status'], period: IStaffPeriodState['period'] = null, returnStatus: IStaffPeriodState['returnStatus'] = null): IStaffPeriodState =>
+    ({ status, period, returnStatus });
+
+  it('«Активные» → «Уволены» → отжали: снова «Активные»', () => {
+    const pressed = toggleStaffPeriod(state('active'), 'fired_month');
+    expect(pressed).toEqual({ status: 'fired', period: 'fired_month', returnStatus: 'active' });
+    expect(toggleStaffPeriod(pressed, 'fired_month')).toEqual({ status: 'active', period: null, returnStatus: null });
+  });
+
+  it('«Все» → «Уволены» → отжали: снова «Все»; «Уволенные» → «Устроены» → отжали: снова «Уволенные»', () => {
+    const fromAll = toggleStaffPeriod(state('all'), 'fired_month');
+    expect(toggleStaffPeriod(fromAll, 'fired_month')).toEqual({ status: 'all', period: null, returnStatus: null });
+    const fromFired = toggleStaffPeriod(state('fired'), 'hired_month');
+    expect(fromFired).toEqual({ status: 'active', period: 'hired_month', returnStatus: 'fired' });
+    expect(toggleStaffPeriod(fromFired, 'hired_month').status).toBe('fired');
+  });
+
+  it('«Активные» → «Устроены» → отжали: остаётся «Активные»', () => {
+    const pressed = toggleStaffPeriod(state('active'), 'hired_month');
+    expect(pressed).toEqual({ status: 'active', period: 'hired_month', returnStatus: 'active' });
+    expect(toggleStaffPeriod(pressed, 'hired_month')).toEqual({ status: 'active', period: null, returnStatus: null });
+  });
+
+  it('переход между чипами не меняет вкладку возврата', () => {
+    const fired = toggleStaffPeriod(state('all'), 'fired_month');
+    const hired = toggleStaffPeriod(fired, 'hired_month');
+    expect(hired).toEqual({ status: 'active', period: 'hired_month', returnStatus: 'all' });
+    expect(toggleStaffPeriod(hired, 'hired_month')).toEqual({ status: 'all', period: null, returnStatus: null });
+  });
+
+  it('чип из ссылки (вкладка возврата не запомнена) → отжали: «Активные»', () => {
+    expect(toggleStaffPeriod(state('fired', 'fired_month'), 'fired_month')).toEqual({ status: 'active', period: null, returnStatus: null });
+    // Переход на другой чип из такой ссылки тоже ничего не запоминает.
+    expect(toggleStaffPeriod(state('fired', 'fired_month'), 'hired_month').returnStatus).toBeNull();
   });
 });

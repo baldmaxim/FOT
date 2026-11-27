@@ -110,6 +110,7 @@ import {
   staffRowActionKind,
   staffSignVisible,
   toApiStaffStatus,
+  toggleStaffPeriod,
   type IAddEmployeeForm,
   type IEmployeeScheduleView,
   type ModalType,
@@ -1718,21 +1719,22 @@ export const StaffControlPage: FC = () => {
     setColumnsAnchor(null);
   }, [columnsAnchor]);
 
+  // Вкладка, с которой нажали первый чип «Устроены» / «Уволены»: отжатие чипа возвращает на неё (toggleStaffPeriod).
+  const [periodReturnStatus, setPeriodReturnStatus] = useState<StaffStatusFilter | null>(null);
+
   const handleStatusChange = useCallback((next: StaffStatusFilter) => {
     setStatusFilter(next);
-    // Ручное переключение вкладки снимает фильтр «с начала месяца».
+    // Ручное переключение вкладки снимает фильтр «с начала месяца» — и возвращаться уже некуда.
     setPeriod(null);
+    setPeriodReturnStatus(null);
   }, []);
 
   const handlePeriodToggle = useCallback((next: StaffPeriod) => {
-    if (period === next) {
-      // Повторный клик снимает только период, вкладка остаётся.
-      setPeriod(null);
-      return;
-    }
-    setStatusFilter(next === 'hired_month' ? 'active' : 'fired');
-    setPeriod(next);
-  }, [period]);
+    const result = toggleStaffPeriod({ status: statusFilter, period, returnStatus: periodReturnStatus }, next);
+    setStatusFilter(result.status);
+    setPeriod(result.period);
+    setPeriodReturnStatus(result.returnStatus);
+  }, [statusFilter, period, periodReturnStatus]);
 
   const monthMovement = useStaffMonthMovement({
     section,
