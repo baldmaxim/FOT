@@ -13,8 +13,9 @@ interface IStaffCategoryCountsProps {
 }
 
 /**
- * «1151 · ИТР 557 · Рабочие 582 · Остальные 12»: первое число — вся вкладка, клик по группе оставляет в таблице
- * только её. Выбранная кнопка подсвечена; без группы подсвечено первое число.
+ * «Все 1151 · ИТР 557 · Рабочие 582 · Остальные 12»: «Все» — вся вкладка, клик по группе оставляет в таблице
+ * только её. Выбранная кнопка подсвечена; без группы подсвечено «Все». Подсказок при наведении нет (27.11.2026):
+ * выбор виден подсветкой.
  */
 export const StaffCategoryCounts: FC<IStaffCategoryCountsProps> = memo(({ counts, category, onSelect, variant }) => {
   const buttonClass = (active: boolean): string => {
@@ -32,9 +33,8 @@ export const StaffCategoryCounts: FC<IStaffCategoryCountsProps> = memo(({ counts
         className={buttonClass(category === null)}
         aria-pressed={category === null}
         onClick={() => onSelect(null)}
-        title="Все сотрудники вкладки"
       >
-        {counts.total}
+        Все {counts.total}
       </button>
       {STAFF_CATEGORY_OPTIONS.map(option => {
         const active = category === option.key;
@@ -46,7 +46,6 @@ export const StaffCategoryCounts: FC<IStaffCategoryCountsProps> = memo(({ counts
               className={buttonClass(active)}
               aria-pressed={active}
               onClick={() => onSelect(active ? null : option.key)}
-              title={active ? 'Показать всех сотрудников вкладки' : `Показать только: ${option.label}`}
             >
               {option.label} {counts[option.key]}
             </button>
