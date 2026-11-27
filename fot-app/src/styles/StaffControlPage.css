@@ -23,32 +23,87 @@
   align-items: center;
 }
 
-/* Разбивка ИТР / Рабочие / Остальные (миграция 381): в плашке шапки рядом с числом; на узком экране в шапке места
-   нет (меню, заголовок, три иконки) — там она строкой под фильтрами (.sc-category-counts--row). */
+/* Разбивка ИТР / Рабочие / Остальные (миграция 381), клик по группе фильтрует таблицу (27.11.2026). В шапке —
+   маленькие кнопки внутри плашки: первое число — вся вкладка, выбранная кнопка — заливкой, как «Активные | Уволенные
+   | Все». На узком экране и в режиме карточек (≤768px, как useIsMobile(768) — там строка под фильтрами есть
+   всегда; iPad портрет — тап-цели 44px) в шапке только число, а кнопки — чипами строкой под фильтрами
+   (.sc-category-counts--row). */
 .sc-category-counts {
+  display: inline-flex;
+  align-items: center;
   white-space: nowrap;
 }
 
-.sc-page-counter .sc-category-counts::before {
-  content: '·';
-  margin: 0 6px;
+/* Число без кнопок — только на узком экране. */
+.sc-page-counter-number {
+  display: none;
+}
+
+/* Поля кнопок съедают поля плашки: первое число стоит там же, где было. */
+.sc-category-counts--header {
+  margin: 0 -6px;
+}
+
+.sc-cat-btn {
+  height: 18px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.sc-cat-btn:hover:not(.is-active) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.sc-cat-btn.is-active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.sc-cat-btn:focus-visible,
+.sc-cat-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sc-cat-sep {
+  margin: 0 1px;
 }
 
 .sc-category-counts--row {
   display: none;
-  font-size: 13px;
-  color: var(--text-muted);
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  white-space: normal;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .sc-page-counter .sc-category-counts {
     display: none;
   }
 
-  .sc-category-counts--row {
+  .sc-page-counter-number {
     display: inline;
-    white-space: normal;
-    overflow-wrap: anywhere;
+  }
+
+  .sc-category-counts--row {
+    display: inline-flex;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sc-cat-btn {
+    transition: none;
   }
 }
 

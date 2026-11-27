@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { addIsoDays, parseStaffStatusFilter, staffRowActionKind, toApiStaffStatus } from './staffControlPage.helpers';
+import {
+  addIsoDays,
+  parseStaffCategoryParam,
+  parseStaffStatusFilter,
+  resolveStaffCategoryDisplay,
+  staffRowActionKind,
+  staffSignVisible,
+  toApiStaffStatus,
+} from './staffControlPage.helpers';
 
 describe('addIsoDays', () => {
   it('переходит через конец месяца', () => {
@@ -59,5 +67,56 @@ describe('staffRowActionKind: действия строки на «Все»', ()
       .toBe('default');
     expect(staffRowActionKind({ employment_status: 'active', excluded_from_timesheet: true, dismissal_date: null }, firedTab))
       .toBe('default');
+  });
+});
+
+describe('«Признак» только во «Все» (27.11.2026)', () => {
+  it('на «Активных» и «Уволенных» он у всех одинаковый — столбца нет', () => {
+    expect(staffSignVisible('all')).toBe(true);
+    expect(staffSignVisible('active')).toBe(false);
+    expect(staffSignVisible('fired')).toBe(false);
+    expect(staffSignVisible('excluded')).toBe(false);
+  });
+});
+
+describe('группа плашки: ?category= и что показать', () => {
+  const COUNTS = { total: 1151, itr: 557, worker: 582, other: 12 };
+
+  it('?category=: три группы, остальное — без группы', () => {
+    expect(parseStaffCategoryParam('itr')).toBe('itr');
+    expect(parseStaffCategoryParam('worker')).toBe('worker');
+    expect(parseStaffCategoryParam('other')).toBe('other');
+    for (const value of [null, '', 'ITR', 'all', 'workers']) expect(parseStaffCategoryParam(value)).toBeNull();
+  });
+
+  it('без группы: число вкладки = строкам таблицы — кнопки; разошлось — только число и перечитать разбивку', () => {
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 1151, category: null, listSettling: false }))
+      .toEqual({ counts: COUNTS, stale: false });
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 1153, category: null, listSettling: false }))
+      .toEqual({ counts: null, stale: true });
+  });
+
+  it('с группой: сверяется число группы, первое число остаётся всей вкладкой', () => {
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 557, category: 'itr', listSettling: false }))
+      .toEqual({ counts: COUNTS, stale: false });
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 12, category: 'other', listSettling: false }))
+      .toEqual({ counts: COUNTS, stale: false });
+    // 1151 строк при выбранной ИТР — разошлось: перечитать, но кнопки не прятать — группу должно быть можно снять.
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 1151, category: 'itr', listSettling: false }))
+      .toEqual({ counts: COUNTS, stale: true });
+  });
+
+  it('список грузит новый набор (на экране прежние строки) — плашка уже по новым фильтрам, без перечитывания', () => {
+    // Клик по «ИТР»: таблица ещё держит 1151 строку.
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 1151, category: 'itr', listSettling: true }))
+      .toEqual({ counts: COUNTS, stale: false });
+    // Сброс на «1151»: таблица ещё держит 557 строк ИТР — плашка не схлопывается.
+    expect(resolveStaffCategoryDisplay({ counts: COUNTS, total: 557, category: null, listSettling: true }))
+      .toEqual({ counts: COUNTS, stale: false });
+  });
+
+  it('разбивки ровно этих фильтров нет — только число таблицы', () => {
+    expect(resolveStaffCategoryDisplay({ counts: null, total: 557, category: 'itr', listSettling: false }))
+      .toEqual({ counts: null, stale: false });
   });
 });

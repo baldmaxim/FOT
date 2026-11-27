@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildStaffCategorySources, staffCategoryCaseSql } from './staff-category.service.js';
+import {
+  buildStaffCategorySources,
+  staffCategoryCaseSql,
+  staffCategoryConditionSql,
+  staffCategoryRowSql,
+} from './staff-category.service.js';
 
 // Корни компаний — как в employees-export.service.ts (раздел определяется по id корня).
 const SM_ROOT_ID = '6c4a3726-4ba9-4550-9978-c5ff50e4f77b';
@@ -54,5 +59,26 @@ describe('staffCategoryCaseSql', () => {
     expect(sql).toContain("dep.department_id = ANY($4::uuid[]) THEN 'worker'");
     expect(sql).toContain("ELSE 'other'");
     expect(params).toEqual([false, ['b'], ['p'], ['s']]);
+  });
+});
+
+describe('staffCategoryRowSql / staffCategoryConditionSql', () => {
+  const SOURCES = { brigadeDepartmentIds: ['b'], smDepartmentIds: ['s'], itrPositionIds: ['p'] };
+
+  it('отдел (у уволенного — до увольнения) считается один раз во вложенном SELECT', () => {
+    const params: unknown[] = [];
+    const sql = staffCategoryRowSql('employees', params, SOURCES);
+    expect(sql.match(/employee_dismissal_events/g)).toHaveLength(1);
+    expect(sql).toContain("category_dep.department_id = ANY($1::uuid[]) THEN 'worker'");
+    expect(sql).toMatch(/\) category_dep\)$/);
+    expect(params).toEqual([['b'], ['p'], ['s']]);
+  });
+
+  it('условие группы — то же выражение строки и параметр группы последним', () => {
+    const params: unknown[] = [false];
+    const condition = staffCategoryConditionSql('employees', params, SOURCES, 'other');
+    const rowParams: unknown[] = [false];
+    expect(condition).toBe(`${staffCategoryRowSql('employees', rowParams, SOURCES)} = $5`);
+    expect(params).toEqual([false, ['b'], ['p'], ['s'], 'other']);
   });
 });

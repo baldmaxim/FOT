@@ -415,4 +415,114 @@ describe.skipIf(!PG_URL)('«Неактивный» и разбивка ИТР / 
     expect(res.body).toEqual({ success: true, data: { id: 9, inactive_department_name: 'Декрет' } });
     expect(ids((await listAll('working')).data)).not.toContain(9);
   });
+
+  // Клик по ИТР / Рабочие / Остальные (27.11.2026): таблица показывает ровно столько строк, сколько на кнопке.
+  describe('группа плашки ?category=', () => {
+    const CATEGORIES = ['itr', 'worker', 'other'] as const;
+
+    const callPage = async (query: Record<string, string>) => {
+      const res = makeRes();
+      await respondEmployeesPage(makeReq(query), res as unknown as Response, Date.now());
+      return res as unknown as { statusCode: number; body: { data: ListRow[]; meta: { total: number } } };
+    };
+
+    it('по каждой вкладке: строк группы = числу на кнопке; группы не пересекаются и вместе дают вкладку', async () => {
+      for (const status of ['working', 'fired', 'all']) {
+        const whole = await listAll(status);
+        const breakdown = await counts(status);
+        const seen: number[] = [];
+        for (const category of CATEGORIES) {
+          const page = await listAll(status, { category });
+          expect(page.meta.total, `${status}/${category}`).toBe(breakdown[category]);
+          expect(page.data, `${status}/${category}`).toHaveLength(breakdown[category]);
+          seen.push(...page.data.map(row => row.id));
+          // Разбивка группу не применяет: остальные кнопки не обнуляются.
+          expect(await counts(status, { category }), `${status}/${category}`).toEqual(breakdown);
+        }
+        expect(seen.sort((a, b) => a - b), status).toEqual(ids(whole.data));
+      }
+    });
+
+    it('группы по правилу: уволенный из бригады — «Рабочие» по отделу до увольнения, без должности — «Остальные»', async () => {
+      expect(ids((await listAll('fired', { category: 'worker' })).data)).toEqual([12]);
+      expect(ids((await listAll('fired', { category: 'itr' })).data)).toEqual([]);
+      expect(ids((await listAll('working', { category: 'worker' })).data)).toEqual([4, 5, 6]);
+      expect(ids((await listAll('working', { category: 'other' })).data)).toEqual([2, 3]);
+      expect(ids((await listAll('working', { category: 'itr' })).data)).toEqual([1, 7, 11, 13]);
+    });
+
+    it('тот же набор в курсорном режиме с сортировкой и в режиме view=list (массовый график по фильтру)', async () => {
+      for (const category of CATEGORIES) {
+        const expected = ids((await listAll('working', { category })).data);
+        const sorted = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000', sort: 'name', dir: 'asc', status: 'working', category });
+        expect(sorted.statusCode).toBe(200);
+        expect(ids(sorted.body.data), category).toEqual(expected);
+        expect(sorted.body.meta.total, category).toBe(expected.length);
+        const list = await callPage({ page: '1', pageSize: '200', view: 'list', status: 'working', category });
+        expect(list.statusCode).toBe(200);
+        expect(ids(list.body.data), category).toEqual(expected);
+      }
+    });
+
+    it('неверная группа — 400 INVALID_CATEGORY у списка и разбивки', async () => {
+      for (const category of ['ITR', 'all', 'workers']) {
+        const page = await callPage({ page: '1', pageSize: '50', view: 'staff', status: 'working', category });
+        expect(page.statusCode, category).toBe(400);
+        expect(page.body).toMatchObject({ code: 'INVALID_CATEGORY' });
+        const res = makeRes();
+        await employeesStaffController.getCategoryCounts(makeReq({ status: 'working', category }), res as unknown as Response);
+        expect(res.statusCode, category).toBe(400);
+      }
+    });
+
+    it('поиск с опечаткой решается по всей вкладке, как у разбивки: число на кнопке = строкам таблицы', async () => {
+      // «Инжинер» точно есть только у ИТР; без этого правила «Рабочие» искали бы с опечаткой и нашли «Инженер в бригаде».
+      await q('INSERT INTO employees (id, full_name, org_department_id, position_id) VALUES (20, \'Инжинер Тестовый\', $1, $2)', [PTO, ENGINEER]);
+      try {
+        for (const search of ['Инжинер', 'Инжанер']) {
+          const breakdown = await counts('working', { search });
+          for (const category of CATEGORIES) {
+            const page = await listAll('working', { search, category });
+            expect(page.meta.total, `${search}/${category}`).toBe(breakdown[category]);
+          }
+        }
+        expect(await counts('working', { search: 'Инжинер' })).toEqual({ total: 1, itr: 1, worker: 0, other: 0 });
+        expect((await listAll('working', { search: 'Инжинер', category: 'worker' })).meta.total).toBe(0);
+        // Точного «инжанер» нет нигде — опечатка допускается по всей вкладке: «Инженер СМ», «Инжинер» и бригада.
+        expect(await counts('working', { search: 'Инжанер' })).toEqual({ total: 3, itr: 2, worker: 1, other: 0 });
+        expect(ids((await listAll('working', { search: 'Инжанер', category: 'worker' })).data)).toEqual([5]);
+      } finally {
+        await q('DELETE FROM employees WHERE id = 20');
+      }
+    });
+
+    it('чипы «Устроены / Уволены» и варианты фильтра столбца — по выбранной группе', async () => {
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+      await q('UPDATE employees SET hire_date = $1::date WHERE id = ANY($2::int[])', [today, [1, 4, 6]]);
+      await q('UPDATE employees SET dismissal_date = $1::date WHERE id = 12', [today]);
+      try {
+        const movement = async (category?: string) => {
+          const res = makeRes();
+          await employeesStaffController.getMonthMovement(makeReq(category ? { category } : {}), res as unknown as Response);
+          expect(res.statusCode).toBe(200);
+          const { hired, fired } = (res.body as { data: { hired: number; fired: number } }).data;
+          return { hired, fired };
+        };
+        expect(await movement()).toEqual({ hired: 3, fired: 1 });
+        expect(await movement('itr')).toEqual({ hired: 1, fired: 0 });
+        expect(await movement('worker')).toEqual({ hired: 2, fired: 1 });
+        expect(await movement('other')).toEqual({ hired: 0, fired: 0 });
+
+        const res = makeRes();
+        // «Остальные» во «Все»: комендант и без должности работают, «Декрет»-маляр и «Архив» — неактивны.
+        await employeesStaffController.getColumnValues(makeReq({ column: 'sign', status: 'all', category: 'other' }), res as unknown as Response);
+        expect((res.body as { data: { values: Array<{ value: string; count: number }> } }).data.values).toEqual([
+          { value: 'Неактивен', count: 2 },
+          { value: 'Работает', count: 2 },
+        ]);
+      } finally {
+        await q('UPDATE employees SET hire_date = NULL, dismissal_date = NULL WHERE id = ANY($1::int[])', [[1, 4, 6, 12]]);
+      }
+    });
+  });
 });

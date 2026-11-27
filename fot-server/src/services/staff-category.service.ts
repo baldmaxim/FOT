@@ -19,6 +19,12 @@ import { isItrPositionName } from './payroll/payroll-department-groups.js';
 
 export type StaffCategory = 'itr' | 'worker' | 'other';
 
+/** Группы плашки в порядке экрана; значение параметра category (клик по группе, решение 27.11.2026). */
+export const STAFF_CATEGORIES: readonly StaffCategory[] = ['itr', 'worker', 'other'];
+
+export const isStaffCategory = (value: unknown): value is StaffCategory =>
+  typeof value === 'string' && (STAFF_CATEGORIES as readonly string[]).includes(value);
+
 export interface IStaffCategorySources {
   /** Отделы раздела «Бригады» (СУ-10 и СМ). */
   brigadeDepartmentIds: string[];
@@ -50,8 +56,8 @@ export async function loadStaffCategorySources(): Promise<IStaffCategorySources>
 
 /**
  * Категория строки: CASE над отделом departmentExpr и должностью alias.position_id. Параметры дописываются в params.
- * departmentExpr — выражение отдела (обычно колонка LATERAL с effectiveDepartmentSql), чтобы подзапрос отдела
- * уволенного не считался дважды.
+ * departmentExpr — колонка с уже посчитанным отделом (см. staffCategoryRowSql), чтобы подзапрос отдела уволенного
+ * не считался дважды.
  */
 export function staffCategoryCaseSql(
   alias: string,
@@ -73,6 +79,28 @@ export function staffCategoryCaseSql(
           END)`;
 }
 
+/**
+ * Категория строки одним выражением: отдел (у уволенного — до увольнения, effectiveDepartmentSql) считается один раз
+ * во вложенном SELECT, дальше — staffCategoryCaseSql. Одно выражение у разбивки и у фильтра таблицы по группе:
+ * число на кнопке плашки равно числу строк таблицы.
+ */
+export function staffCategoryRowSql(alias: string, params: unknown[], sources: IStaffCategorySources): string {
+  const caseSql = staffCategoryCaseSql(alias, 'category_dep.department_id', params, sources);
+  return `(SELECT ${caseSql} FROM (SELECT ${effectiveDepartmentSql(alias)} AS department_id) category_dep)`;
+}
+
+/** Условие «строка в группе category» для WHERE; параметры дописываются в params. */
+export function staffCategoryConditionSql(
+  alias: string,
+  params: unknown[],
+  sources: IStaffCategorySources,
+  category: StaffCategory,
+): string {
+  const rowSql = staffCategoryRowSql(alias, params, sources);
+  params.push(category);
+  return `${rowSql} = $${params.length}`;
+}
+
 export interface IStaffCategoryCounts {
   total: number;
   itr: number;
@@ -90,7 +118,7 @@ export async function countStaffCategories(
   sources: IStaffCategorySources,
 ): Promise<IStaffCategoryCounts> {
   const categoryParams = [...params];
-  const categorySql = staffCategoryCaseSql('employees', 'dep.department_id', categoryParams, sources);
+  const categorySql = staffCategoryRowSql('employees', categoryParams, sources);
   const where = whereParts.length > 0 ? whereParts.join(' AND ') : 'TRUE';
   const rows = await query<{ total: number | string; itr: number | string; worker: number | string; other: number | string }>(
     `SELECT count(*)::int AS total,
@@ -100,7 +128,6 @@ export async function countStaffCategories(
        FROM (
          SELECT ${categorySql} AS category
            FROM employees
-          CROSS JOIN LATERAL (SELECT ${effectiveDepartmentSql('employees')} AS department_id) dep
           WHERE ${where}
        ) c`,
     categoryParams,

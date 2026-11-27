@@ -22,6 +22,13 @@ export const affectedColumns = (changes: readonly StaffRowChange[]): StaffSortKe
 export const affectsActiveSort = (changes: readonly StaffRowChange[], sort: StaffSortKey): boolean =>
   affectedColumns(changes).includes(sort);
 
+/**
+ * Группа плашки (ИТР / Рабочие / Остальные) считается от отдела и должности: такая правка может перенести строку
+ * в другую группу — разбивку перечитать, а при выбранной группе и список.
+ */
+export const affectsStaffCategory = (changes: readonly StaffRowChange[]): boolean =>
+  changes.includes('department') || changes.includes('position');
+
 /** Правка столбца с активным фильтром: строка могла выпасть из выдачи или попасть в неё. */
 export const affectsActiveFilters = (
   changes: readonly StaffRowChange[],

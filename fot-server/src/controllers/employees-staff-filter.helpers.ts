@@ -2,8 +2,10 @@
  * Общий фильтр «Управления кадрами» для GET /employees (постранично), счётчиков месяца и
  * выгрузки текущей таблицы. База — права, архивность, раздел, отдел, график; статус и
  * период добавляются отдельно: счётчикам месяца они не нужны (иначе на «Действующих» число
- * уволенных всегда было бы 0). Поиск по ФИО — последним (appendStaffFioSearch): допуск
- * опечатки решается по итоговому набору экрана.
+ * уволенных всегда было бы 0). Поиск по ФИО — последним из условий экрана (appendStaffFioSearch):
+ * допуск опечатки решается по итоговому набору вкладки. Группа плашки (ИТР / Рабочие / Остальные,
+ * appendStaffCategoryCondition) — уже после поиска: опечатка решается по всей вкладке, как у разбивки,
+ * поэтому число на кнопке группы равно числу строк таблицы.
  */
 import { query, queryOne } from '../config/postgres.js';
 import {
@@ -21,6 +23,12 @@ import { listExplicitDepartmentIdsForUser } from '../services/department-access.
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { collectDeptIds } from '../services/skud-shared.service.js';
 import { loadAutoInactiveDepartmentIds, workingConditionSql } from '../services/employee-inactive.service.js';
+import {
+  isStaffCategory,
+  loadStaffCategorySources,
+  staffCategoryConditionSql,
+  type StaffCategory,
+} from '../services/staff-category.service.js';
 import { buildFioSearch, fioExactConditionSql, fioFuzzyConditionSql, type IFioSearch } from '../utils/fio-search.utils.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -49,6 +57,11 @@ export interface IStaffBaseFilter {
   showArchived: boolean;
   /** Поиск по ФИО (null — без поиска); в whereParts не входит — см. appendStaffFioSearch. */
   search: IFioSearch | null;
+  /**
+   * Группа плашки из ?category= (null — все); в whereParts не входит — см. appendStaffCategoryCondition.
+   * Разбивка (category-counts) её не применяет: числа других групп не обнуляются.
+   */
+  category: StaffCategory | null;
 }
 
 export type StaffBaseFilterResult =
@@ -75,6 +88,10 @@ export async function buildStaffBaseFilter(req: AuthenticatedRequest): Promise<S
   const sectionParam = parseSectionParam(req.query.section);
   if (!sectionParam.ok) {
     return { kind: 'error', status: 400, body: { success: false, error: 'Некорректный раздел', code: 'INVALID_SECTION' } };
+  }
+  const categoryParam = parseStaffCategory(req.query.category);
+  if (!categoryParam.ok) {
+    return { kind: 'error', status: 400, body: { success: false, error: 'Некорректная группа', code: 'INVALID_CATEGORY' } };
   }
   const sectionContext = sectionParam.section
     ? await resolveSectionFilterContext(req, sectionParam.section, globalRead)
@@ -193,7 +210,7 @@ export async function buildStaffBaseFilter(req: AuthenticatedRequest): Promise<S
   }
 
   const search = buildFioSearch(typeof req.query.search === 'string' ? req.query.search : '');
-  return { kind: 'ok', whereParts, params, departmentId, showArchived, search };
+  return { kind: 'ok', whereParts, params, departmentId, showArchived, search, category: categoryParam.value };
 }
 
 /**
@@ -222,7 +239,26 @@ export async function appendStaffFioSearch(
     : fioExactConditionSql('employees', params, search));
 }
 
+/**
+ * Условие группы плашки (ИТР / Рабочие / Остальные) для `FROM employees` без алиаса. Вызывать сразу после
+ * appendStaffFioSearch — до сортировки, курсора и LIMIT. category null или не задана — без условия и без запросов.
+ */
+export async function appendStaffCategoryCondition(
+  whereParts: string[],
+  params: unknown[],
+  category: StaffCategory | null | undefined,
+): Promise<void> {
+  if (!category) return;
+  whereParts.push(staffCategoryConditionSql('employees', params, await loadStaffCategorySources(), category));
+}
+
 export type StrictParseResult<T> = { ok: true; value: T } | { ok: false };
+
+/** Группа плашки: нет параметра — null (все); повтор параметра или неизвестное значение — ошибка. */
+export function parseStaffCategory(value: unknown): StrictParseResult<StaffCategory | null> {
+  if (value === undefined || value === '') return { ok: true, value: null };
+  return isStaffCategory(value) ? { ok: true, value } : { ok: false };
+}
 
 /** Строгий статус (новые клиенты и новые эндпоинты): нет параметра — active. */
 export function parseStaffStatus(value: unknown): StrictParseResult<StaffStatus> {

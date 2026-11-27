@@ -7,7 +7,7 @@
  */
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleType } from '../types/schedule';
-import type { StaffApiStatus } from '../services/employeeService';
+import type { IStaffCategoryCounts, StaffApiStatus, StaffCategory } from '../services/employeeService';
 import type { Employee } from '../types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -27,6 +27,50 @@ export const parseStaffStatusFilter = (value: string | null): StaffStatusFilter 
  */
 export const toApiStaffStatus = (filter: StaffStatusFilter): StaffApiStatus =>
   filter === 'active' ? 'working' : filter;
+
+/** «Признак» на экране и в выгрузке — только во «Все»: на «Активных» и «Уволенных» он у всех одинаковый. */
+export const staffSignVisible = (filter: StaffStatusFilter): boolean => filter === 'all';
+
+/** Группы плашки в порядке экрана. */
+export const STAFF_CATEGORY_OPTIONS: ReadonlyArray<{ key: StaffCategory; label: string }> = [
+  { key: 'itr', label: 'ИТР' },
+  { key: 'worker', label: 'Рабочие' },
+  { key: 'other', label: 'Остальные' },
+];
+
+/** Значение ?category= в адресе экрана; неизвестное — без группы. */
+export const parseStaffCategoryParam = (value: string | null): StaffCategory | null =>
+  STAFF_CATEGORY_OPTIONS.find(option => option.key === value)?.key ?? null;
+
+export interface IStaffCategoryDisplay {
+  /** Числа плашки; null — в шапке только число таблицы. */
+  counts: IStaffCategoryCounts | null;
+  /**
+   * Список устоялся, а число на кнопке с ним разошлось (кого-то приняли или уволили между запросами разбивки и
+   * списка) — разбивку нужно перечитать.
+   */
+  stale: boolean;
+}
+
+/**
+ * Что показать в плашке. counts — разбивка ровно текущих фильтров (ключ сверен) или null.
+ *  - Список грузит новый набор (прежние строки на экране) — плашка уже по новым фильтрам: не схлопывается на каждом
+ *    клике, числа в ней согласованы между собой.
+ *  - Список устоялся: число на кнопке (выбранной группы или «все») должно совпасть с числом строк таблицы. Разошлось —
+ *    перечитать разбивку; без группы до этого в шапке только число таблицы, а выбранная группа видна всегда —
+ *    её должно быть можно снять.
+ */
+export const resolveStaffCategoryDisplay = ({ counts, total, category, listSettling }: {
+  counts: IStaffCategoryCounts | null;
+  total: number;
+  category: StaffCategory | null;
+  listSettling: boolean;
+}): IStaffCategoryDisplay => {
+  if (!counts) return { counts: null, stale: false };
+  if (listSettling) return { counts, stale: false };
+  const stale = (category ? counts[category] : counts.total) !== total;
+  return { counts: stale && !category ? null : counts, stale };
+};
 
 /** Что показывает столбец действий строки: одно главное действие или обычный набор иконок. */
 export type StaffRowActionKind = 'return' | 'rehire' | 'cancel-dismissal' | 'default';

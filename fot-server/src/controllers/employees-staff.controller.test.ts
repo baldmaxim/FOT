@@ -117,7 +117,7 @@ describe('GET /employees/export-view', () => {
     { id: 1, full_name: '@Борисов Б.', hire_date: null, birth_date: '1990-05-17', department_name: null, position_name: null, schedule_name: null, staff_comment: null, sign: 'Уволен' },
   ];
 
-  it('один лист, 10 колонок в порядке экрана, строки в порядке SQL, даты — Excel Date, защита от формул, строгий аудит', async () => {
+  it('один лист, 9 колонок в порядке экрана («Уволенные» — без «Признака»), строки в порядке SQL, даты — Excel Date, защита от формул, строгий аудит', async () => {
     h.query.mockResolvedValue(rows);
     const res = makeRes();
     await employeesStaffController.exportView(makeReq({ status: 'fired', sort: 'department', dir: 'desc', section: 'su10', period: 'fired_month' }), res as unknown as Response);
@@ -127,6 +127,8 @@ describe('GET /employees/export-view', () => {
     expect(sql).toContain('ORDER BY (s.sort_key IS NULL) ASC, s.sort_key DESC, s.id DESC');
     expect(sql).toContain(`employment_status = 'fired'`);
     expect(sql).toMatch(/dismissal_date BETWEEN/);
+    // Признак на «Уволенных» не считается: столбца в файле нет.
+    expect(sql).toContain('NULL::text AS sign');
     expect(params.at(-1)).toBe(50001);
 
     const workbook = new ExcelJS.Workbook();
@@ -134,7 +136,7 @@ describe('GET /employees/export-view', () => {
     expect(workbook.worksheets).toHaveLength(1);
     const ws = workbook.worksheets[0];
     expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual([
-      '№', 'ФИО', 'Отдел', 'Должность', 'Дата трудоустройства', 'Дата рождения', 'График', 'Объект', 'Комментарий', 'Признак',
+      '№', 'ФИО', 'Отдел', 'Должность', 'Дата трудоустройства', 'Дата рождения', 'График', 'Объект', 'Комментарий',
     ]);
     const first = ws.getRow(2);
     expect(first.getCell(1).value).toBe(1);
@@ -220,22 +222,37 @@ describe('GET /employees/export-view', () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
     const ws = workbook.worksheets[0];
-    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Должность', 'Признак']);
+    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Должность']);
     expect(ws.getRow(2).getCell(4).value).toBe("'=Журавлев В. С.");
     expect(h.logWithClient.mock.calls[0][4].details.columns).toEqual(['department', 'site', 'position']);
   });
 
-  it('columns= (пусто) — только №, ФИО, Признак; без участка индекс не грузится', async () => {
+  it('columns= (пусто) во «Все» — только №, ФИО, Признак; без участка индекс не грузится', async () => {
     mockSiteAndRows(rows);
     const res = makeRes();
-    await employeesStaffController.exportView(makeReq({ columns: '' }), res as unknown as Response);
+    await employeesStaffController.exportView(makeReq({ columns: '', status: 'all' }), res as unknown as Response);
 
     expect(res.statusCode).toBe(200);
     expect(h.query.mock.calls.some(([sql]) => String(sql).includes('FROM employee_department_access'))).toBe(false);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
-    expect((workbook.worksheets[0].getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Признак']);
+    const ws = workbook.worksheets[0];
+    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Признак']);
+    expect(ws.getRow(2).getCell(3).value).toBe('Работает');
+    expect(ws.getRow(3).getCell(3).value).toBe('Уволен');
     expect(h.logWithClient.mock.calls[0][4].details.columns).toEqual([]);
+  });
+
+  it('«Активные» (working) и прежний active — без «Признака»', async () => {
+    for (const status of ['working', 'active']) {
+      h.query.mockReset().mockResolvedValue(rows);
+      const res = makeRes();
+      await employeesStaffController.exportView(makeReq({ columns: '', status }), res as unknown as Response);
+      expect(res.statusCode, status).toBe(200);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
+      expect((workbook.worksheets[0].getRow(1).values as unknown[]).slice(1), status).toEqual(['№', 'ФИО']);
+    }
   });
 
   it('неверный columns — 400 INVALID_COLUMNS: неизвестный ключ, повтор параметра, длина', async () => {
@@ -357,6 +374,97 @@ describe('GET /employees/column-values — участок', () => {
     expect(params).toContainEqual(['Журавлев В. С.', 'Пудовкин А. А.']);
     // Собственный фильтр участка в фасетах не применяется.
     expect(sql).not.toContain('employees.org_department_id = ANY(');
+  });
+});
+
+describe('группа плашки ?category= (ИТР / Рабочие / Остальные)', () => {
+  const DEPARTMENTS_SQL = 'SELECT id, parent_id, name, kind FROM org_departments';
+  const POSITIONS_SQL = 'SELECT id, name FROM positions';
+  const exportRows = [
+    { id: 2, full_name: 'Абаев А.', hire_date: null, birth_date: null, department_name: 'ПТО', position_name: 'инженер', schedule_name: null, staff_comment: null, sign: 'Работает' },
+  ];
+  /** Источники разбивки (отделы и должности) — по точному SQL, остальное — строки ответа. */
+  const mockQueries = (rest: unknown[] = []) => h.query.mockImplementation(async (sql: string) => {
+    if (sql === DEPARTMENTS_SQL) return [];
+    if (sql === POSITIONS_SQL) return [{ id: 'p-eng', name: 'инженер' }, { id: 'p-painter', name: 'Маляр' }];
+    return rest;
+  });
+  const withCategory = (category: string | null) =>
+    h.buildStaffBaseFilter.mockImplementation(async () => ({ ...baseFilter(), category }));
+  const mainCalls = () => h.query.mock.calls.filter(([sql]) => sql !== DEPARTMENTS_SQL && sql !== POSITIONS_SQL) as Array<[string, unknown[]]>;
+
+  it('parseStaffCategory: нет — null, три группы, остальное (в т.ч. повтор параметра) — ошибка', async () => {
+    const { parseStaffCategory } = await import('./employees-staff-filter.helpers.js');
+    expect(parseStaffCategory(undefined)).toEqual({ ok: true, value: null });
+    expect(parseStaffCategory('')).toEqual({ ok: true, value: null });
+    for (const value of ['itr', 'worker', 'other'] as const) expect(parseStaffCategory(value)).toEqual({ ok: true, value });
+    for (const value of ['ITR', 'all', 'workers', ['itr'], ['itr', 'other'], 1]) expect(parseStaffCategory(value)).toEqual({ ok: false });
+  });
+
+  it('выгрузка «Все» с группой: условие группы в SQL, «Признак» есть, группа в имени файла и в аудите', async () => {
+    withCategory('itr');
+    mockQueries(exportRows);
+    const res = makeRes();
+    await employeesStaffController.exportView(makeReq({ status: 'all', section: 'su10', columns: '' }), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    const [sql, params] = mainCalls()[0];
+    expect(sql).toContain('category_dep');
+    expect(sql).not.toContain('NULL::text AS sign');
+    expect(params).toContain('itr');
+    expect(params).toContainEqual(['p-eng']);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
+    expect((workbook.worksheets[0].getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Признак']);
+    expect(decodeURIComponent(res.headers['Content-Disposition'])).toMatch(/filename="Сотрудники_СУ-10_Все_ИТР_\d{2}\.\d{2}\.\d{4}\.xlsx"/);
+    expect(h.logWithClient.mock.calls[0][4].details).toMatchObject({ status: 'all', category: 'itr' });
+  });
+
+  it('без группы — ни условия, ни запросов источников; в имени файла группы нет, в аудите null', async () => {
+    withCategory(null);
+    mockQueries(exportRows);
+    const res = makeRes();
+    await employeesStaffController.exportView(makeReq({ status: 'working', section: 'su10' }), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.query.mock.calls.some(([sql]) => sql === POSITIONS_SQL)).toBe(false);
+    expect(mainCalls()[0][0]).not.toContain('category_dep');
+    expect(decodeURIComponent(res.headers['Content-Disposition'])).toMatch(/filename="Сотрудники_СУ-10_Активные_\d{2}\.\d{2}\.\d{4}\.xlsx"/);
+    expect(h.logWithClient.mock.calls[0][4].details.category).toBeNull();
+  });
+
+  it('разбивка группу не применяет: числа других групп не обнуляются', async () => {
+    withCategory('worker');
+    mockQueries([{ total: 3, itr: 1, worker: 1, other: 1 }]);
+    const res = makeRes();
+    await employeesStaffController.getCategoryCounts(makeReq({ status: 'working' }), res as unknown as Response);
+
+    expect(res.body).toEqual({ success: true, data: { total: 3, itr: 1, worker: 1, other: 1 } });
+    const [sql, params] = mainCalls()[0];
+    expect(sql).toContain("count(*) FILTER (WHERE c.category = 'worker')");
+    expect(params).not.toContain('worker');
+    // Категория строки — то же выражение, что у фильтра таблицы.
+    expect(sql).toContain('category_dep');
+  });
+
+  it('чипы месяца и варианты фильтра столбца — с группой, условие после поиска по ФИО', async () => {
+    withCategory('other');
+    mockQueries([{ value: 'ПТО', count: 1 }]);
+    h.queryOne.mockResolvedValue({ hired: 1, fired: 0 });
+
+    let res = makeRes();
+    await employeesStaffController.getMonthMovement(makeReq(), res as unknown as Response);
+    expect(res.statusCode).toBe(200);
+    const [movementSql, movementParams] = h.queryOne.mock.calls[0] as [string, unknown[]];
+    expect(movementSql).toContain('category_dep');
+    expect(movementParams.at(-1)).toBe('other');
+
+    res = makeRes();
+    await employeesStaffController.getColumnValues(makeReq({ column: 'department' }), res as unknown as Response);
+    expect(res.statusCode).toBe(200);
+    const [valuesSql, valuesParams] = mainCalls().at(-1)!;
+    expect(valuesSql).toContain('category_dep');
+    expect(valuesParams).toContain('other');
   });
 });
 

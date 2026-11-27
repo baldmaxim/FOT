@@ -20,6 +20,7 @@ import {
   type IKeysetParams,
 } from './employees-list-page.helpers.js';
 import {
+  appendStaffCategoryCondition,
   appendStaffFioSearch,
   buildStaffBaseFilter,
   parseStaffPeriod,
@@ -110,8 +111,10 @@ export async function respondEmployeesPage(req: AuthenticatedRequest, res: Respo
   if (periodParsed.value) whereParts.push(periodConditionSql(periodParsed.value, resolveMonthRange(), params));
   try {
     await appendColumnFilters(whereParts, params, columnFiltersParsed.filters, { ctx });
-    // Последним из условий: опечатка допускается, только если точных нет во всём наборе (все порции).
+    // Последним из условий экрана: опечатка допускается, только если точных нет во всём наборе (все порции).
     await appendStaffFioSearch(whereParts, params, filter.search);
+    // Группа плашки — после поиска, как у разбивки (category-counts): строк ровно столько, сколько на кнопке.
+    await appendStaffCategoryCondition(whereParts, params, filter.category);
   } catch (error) {
     if (error instanceof StaffFilterUnavailableError) {
       res.status(409).json({ success: false, error: error.message, code: 'FILTER_UNAVAILABLE' });

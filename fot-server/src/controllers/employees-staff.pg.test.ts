@@ -467,7 +467,8 @@ describe.skipIf(!PG_URL)('«Управление кадрами» на PostgreSQ
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(res.sent as unknown as ArrayBuffer);
       const ws = workbook.worksheets[0];
-      expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Признак']);
+      // Без статуса — прежний active: «Признак», как на экране, только во «Все».
+      expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['№', 'ФИО', 'Отдел', 'Участок']);
       const exported = Array.from({ length: ws.rowCount - 1 }, (_, i) => String(ws.getRow(i + 2).getCell(4).value ?? ''));
       const listed = await callPage({ page: '1', keyset: '1', view: 'staff', pageSize: '1000', sort: 'site', dir: 'asc' });
       expect(exported).toEqual((listed.body.data as unknown as Array<{ site_supervisor_names: string | null }>)

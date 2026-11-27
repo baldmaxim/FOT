@@ -15,6 +15,9 @@ interface ApiResponse<T> {
  */
 export type StaffApiStatus = 'active' | 'working' | 'fired' | 'all' | 'excluded';
 
+/** Группа плашки «Текущих сотрудников»: ИТР / Рабочие / Остальные (клик по группе фильтрует таблицу). */
+export type StaffCategory = 'itr' | 'worker' | 'other';
+
 export interface PaginatedParams {
   page: number;
   pageSize?: number;
@@ -39,6 +42,8 @@ export interface PaginatedParams {
   period?: StaffPeriod;
   /** Фильтры столбцов — уже сериализованные (serializeColumnFilters); '' — нет. */
   cf?: string;
+  /** Группа плашки; не задана — все. */
+  category?: StaffCategory;
 }
 
 export type StaffSortKey =
@@ -65,7 +70,9 @@ export interface IStaffViewParams {
   sort?: StaffSortKey;
   dir?: StaffSortDir;
   cf?: string;
-  /** Только выгрузка: видимые столбцы; [] — только «№», «ФИО», «Признак»; не задан — прежний набор. */
+  /** Группа плашки (ИТР / Рабочие / Остальные); не задана — все. Разбивке не передаётся. */
+  category?: StaffCategory;
+  /** Только выгрузка: видимые столбцы; [] — только «№», «ФИО» (и «Признак» во «Все»); не задан — прежний набор. */
   columns?: readonly StaffTableColumn[];
 }
 
@@ -120,6 +127,7 @@ export const appendStaffViewParams = (qs: URLSearchParams, params: IStaffViewPar
   if (params.sort) qs.set('sort', params.sort);
   if (params.dir) qs.set('dir', params.dir);
   if (params.cf) qs.set('cf', params.cf);
+  if (params.category) qs.set('category', params.category);
   // Пустой список — тоже значение (columns=): сервер выгрузит только фиксированные столбцы.
   if (params.columns !== undefined) qs.set('columns', params.columns.join(','));
 };
@@ -214,6 +222,7 @@ export const employeeService = {
     if (params.archived) qs.set('archived', 'true');
     if (params.period) qs.set('period', params.period);
     if (params.cf) qs.set('cf', params.cf);
+    if (params.category) qs.set('category', params.category);
     if (params.sort && params.cursor !== undefined) {
       qs.set('sort', params.sort);
       qs.set('dir', params.dir ?? 'asc');
@@ -318,9 +327,12 @@ export const employeeService = {
     return response.data;
   },
 
-  /** ИТР / Рабочие / Остальные по тем же фильтрам, что у таблицы (статус и период — тоже). */
+  /**
+   * ИТР / Рабочие / Остальные по тем же фильтрам, что у таблицы (статус и период — тоже). Выбранная группа не
+   * передаётся: иначе две другие кнопки показали бы нули.
+   */
   async getCategoryCounts(
-    params: Omit<IStaffViewParams, 'sort' | 'dir' | 'columns'>,
+    params: Omit<IStaffViewParams, 'sort' | 'dir' | 'columns' | 'category'>,
     signal?: AbortSignal,
   ): Promise<IStaffCategoryCounts> {
     const qs = new URLSearchParams();

@@ -63,12 +63,17 @@ describe('видимые столбцы и ширина', () => {
     expect(visibleStaffColumns(DEFAULT_HIDDEN_STAFF_COLUMNS)).toEqual(
       ['department', 'position', 'hire_date', 'birth_date', 'schedule', 'main_object', 'comment'],
     );
-    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, false)).toBe(1610);
-    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, true)).toBe(1654);
+    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, false, true)).toBe(1610);
+    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, true, true)).toBe(1654);
   });
 
   it('«Участок» — между «Отделом» и «Должностью», +150px', () => {
     expect(visibleStaffColumns(new Set()).slice(0, 3)).toEqual(['department', 'site', 'position']);
-    expect(staffTableMinWidth(new Set(), false)).toBe(1760);
+    expect(staffTableMinWidth(new Set(), false, true)).toBe(1760);
+  });
+
+  it('без «Признака» («Активные», «Уволенные») — на 130px уже', () => {
+    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, false, false)).toBe(1480);
+    expect(staffTableMinWidth(DEFAULT_HIDDEN_STAFF_COLUMNS, true, false)).toBe(1524);
   });
 });

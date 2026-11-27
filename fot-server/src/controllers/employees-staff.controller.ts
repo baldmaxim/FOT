@@ -16,13 +16,14 @@ import {
   type IStaffViewExportRow,
 } from '../services/employees-staff-view-excel.service.js';
 import { buildStaffSiteFacetJoinSql, createStaffSqlContext, type IStaffSqlContext } from '../services/staff-site.service.js';
-import { countStaffCategories, loadStaffCategorySources } from '../services/staff-category.service.js';
+import { countStaffCategories, loadStaffCategorySources, type StaffCategory } from '../services/staff-category.service.js';
 import { loadAutoInactiveDepartmentIds, workingConditionSql } from '../services/employee-inactive.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { resolveExportPeriod } from './employees-export.controller.js';
 import {
+  appendStaffCategoryCondition,
   appendStaffFioSearch,
   buildStaffBaseFilter,
   parseStaffPeriod,
@@ -61,6 +62,7 @@ const SECTION_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   active: 'Действующие', working: 'Активные', fired: 'Уволенные', all: 'Все', excluded: 'Исключённые',
 };
+const CATEGORY_LABELS: Record<StaffCategory, string> = { itr: 'ИТР', worker: 'Рабочие', other: 'Остальные' };
 
 const formatFileDay = (iso: string): string => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
@@ -133,6 +135,7 @@ export const employeesStaffController = {
       const valueColumn = column as StaffValueFilterColumn;
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx, valueColumn))) return;
       await appendStaffFioSearch(whereParts, params, filter.search);
+      await appendStaffCategoryCondition(whereParts, params, filter.category);
 
       let valuesSql: string;
       try {
@@ -261,6 +264,8 @@ export const employeesStaffController = {
       // Своё множество — принятые и уволенные за месяц: по нему же решается допуск опечатки в поиске.
       whereParts.push(`((${hiredSql}) OR (${firedSql}))`);
       await appendStaffFioSearch(whereParts, params, filter.search);
+      // Выбранная группа плашки: чип ведёт в таблицу с той же группой.
+      await appendStaffCategoryCondition(whereParts, params, filter.category);
       const row = await queryOne<{ hired: number | string; fired: number | string }>(
         `SELECT count(*) FILTER (WHERE ${hiredSql})::int AS hired,
                 count(*) FILTER (WHERE ${firedSql})::int AS fired
@@ -286,7 +291,9 @@ export const employeesStaffController = {
   /**
    * GET /api/employees/category-counts — разбивка таблицы на ИТР / Рабочие / Остальные (плашка в шапке).
    * WHERE собирается в том же порядке, что у списка (respondEmployeesPage): база → статус → период → фильтры
-   * столбцов → поиск по ФИО последним, поэтому total равен числу строк таблицы, а сумма категорий — total.
+   * столбцов → поиск по ФИО, поэтому total равен числу строк вкладки, а сумма категорий — total.
+   * Выбранную группу (?category=) разбивка не применяет: иначе две другие кнопки показали бы нули. Список с группой
+   * добавляет её после поиска (appendStaffCategoryCondition) — его total равен числу на кнопке группы.
    */
   async getCategoryCounts(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -375,6 +382,7 @@ export const employeesStaffController = {
       if (period) whereParts.push(periodConditionSql(period, resolveMonthRange(), params));
       if (!(await appendColumnFiltersOr409(res, whereParts, params, columnFilters.filters, ctx))) return;
       await appendStaffFioSearch(whereParts, params, filter.search);
+      await appendStaffCategoryCondition(whereParts, params, filter.category);
 
       let sortKeySql: string;
       try {
@@ -388,14 +396,16 @@ export const employeesStaffController = {
       }
       // Те же выражения, что у сортировки, — значения в файле совпадают с порядком строк.
       const scheduleSql = await buildStaffSortKeySql('schedule', params, ctx);
-      const signSql = await buildStaffSortKeySql('sign', params, ctx);
+      // «Признак», как на экране, — только во «Все»: на «Активных» и «Уволенных» он у всех одинаковый.
+      const withSign = status === 'all';
+      const signSql = withSign ? await buildStaffSortKeySql('sign', params, ctx) : 'NULL::text';
       const siteSql = columns.includes('site') ? await buildStaffSortKeySql('site', params, ctx) : 'NULL::text';
       params.push(MAX_EXPORT_EMPLOYEES + 1);
 
       const rows = await query<{
         id: number; full_name: string | null; hire_date: string | null; birth_date: string | null;
         department_name: string | null; site_name: string | null; position_name: string | null;
-        schedule_name: string | null; staff_comment: string | null; sign: string;
+        schedule_name: string | null; staff_comment: string | null; sign: string | null;
       }>(
         `SELECT s.id, s.full_name, s.hire_date, s.birth_date, s.department_name, s.site_name, s.position_name,
                 s.schedule_name, s.staff_comment, s.sign
@@ -443,14 +453,15 @@ export const employeesStaffController = {
         schedule: row.schedule_name ?? '',
         object: objects?.objects.get(Number(row.id)) ?? '',
         comment: row.staff_comment ?? '',
-        sign: row.sign,
+        sign: row.sign ?? '',
       }));
-      const buffer = Buffer.from(await buildStaffViewWorkbook(exportRows, columns).xlsx.writeBuffer());
+      const buffer = Buffer.from(await buildStaffViewWorkbook(exportRows, columns, { withSign }).xlsx.writeBuffer());
 
       const section = typeof req.query.section === 'string' && req.query.section ? req.query.section : 'all';
       const today = resolveMonthRange().today;
+      const categoryPart = filter.category ? `_${CATEGORY_LABELS[filter.category]}` : '';
       const fileName = sanitizeExportFileName(
-        `Сотрудники_${SECTION_LABELS[section] ?? 'Все'}_${STATUS_LABELS[status] ?? 'Все'}_${formatFileDay(today)}.xlsx`,
+        `Сотрудники_${SECTION_LABELS[section] ?? 'Все'}_${STATUS_LABELS[status] ?? 'Все'}${categoryPart}_${formatFileDay(today)}.xlsx`,
       );
 
       // Строгий аудит до отправки файла: ошибка записи — 500 без файла.
@@ -465,6 +476,7 @@ export const employeesStaffController = {
             schedule_id: typeof req.query.schedule_id === 'string' ? req.query.schedule_id || null : null,
             status,
             period,
+            category: filter.category ?? null,
             sort: sort.key,
             dir: sort.dir,
             columns,

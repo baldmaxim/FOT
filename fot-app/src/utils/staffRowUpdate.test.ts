@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { affectsActiveFilters, affectsActiveSort } from './staffRowUpdate';
+import { affectsActiveFilters, affectsActiveSort, affectsStaffCategory } from './staffRowUpdate';
 
 describe('affectsActiveFilters', () => {
   it('правка столбца с фильтром — перечитать; «Признак» зависит от отдела', () => {
@@ -30,5 +30,14 @@ describe('affectsActiveSort', () => {
     expect(affectsActiveSort(['position'], 'department')).toBe(false);
     expect(affectsActiveSort(['schedule'], 'hire_date')).toBe(false);
     expect(affectsActiveSort([], 'comment')).toBe(false);
+  });
+});
+
+describe('affectsStaffCategory', () => {
+  it('группа ИТР / Рабочие / Остальные зависит от отдела и должности', () => {
+    expect(affectsStaffCategory(['department'])).toBe(true);
+    expect(affectsStaffCategory(['position'])).toBe(true);
+    expect(affectsStaffCategory(['comment', 'schedule'])).toBe(false);
+    expect(affectsStaffCategory([])).toBe(false);
   });
 });

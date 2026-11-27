@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Employee } from '../types';
-import type { StaffApiStatus, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
+import type { StaffApiStatus, StaffCategory, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
 import { useStaffScreenTree } from './useStructure';
 import {
   EMPTY_EMPLOYEE_COUNTS,
@@ -38,6 +38,8 @@ interface IUseStaffDataParams {
   period?: StaffPeriod;
   /** Сериализованные фильтры столбцов ('' — нет). */
   cf?: string;
+  /** Группа плашки (ИТР / Рабочие / Остальные); не задана — все. */
+  category?: StaffCategory;
   /** false — список не запрашивается (раздел по умолчанию ещё не определён). */
   enabled?: boolean;
   /** Право «все сотрудники»: дерево отделов — полное, а не по назначенным отделам. */
@@ -45,7 +47,7 @@ interface IUseStaffDataParams {
 }
 
 export const useStaffData = (params: IUseStaffDataParams) => {
-  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, cf, enabled = true, allEmployees = false } = params;
+  const { search, departmentId, scheduleId, section, status = 'active', sort, dir, period, cf, category, enabled = true, allEmployees = false } = params;
   const queryClient = useQueryClient();
   const structureQuery = useStaffScreenTree(allEmployees);
   const employeesParams = {
@@ -60,6 +62,7 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     dir,
     period: period || undefined,
     cf: cf || undefined,
+    category: category || undefined,
     view: 'staff' as const,
   };
   const employeesQueryKey = infiniteEmployeesQueryKey(employeesParams);
@@ -132,6 +135,8 @@ export const useStaffData = (params: IUseStaffDataParams) => {
     departments,
     countsByDepartment: counts.byDepartment,
     loading: !enabled || employeesQuery.isPending || structureQuery.isPending || countsQuery.isPending,
+    /** Новый набор ещё грузится: в таблице строки прежних фильтров (keepPreviousData) или пока ничего. */
+    listSettling: !enabled || employeesQuery.isPending || isPlaceholderData,
     isFirstPageError: employeesQuery.isError && !pages,
     firstPageError: employeesQuery.error,
     retryFirstPage: employeesQuery.refetch,

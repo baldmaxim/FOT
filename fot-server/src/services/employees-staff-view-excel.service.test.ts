@@ -39,8 +39,11 @@ describe('parseStaffViewColumns', () => {
 });
 
 describe('buildStaffViewWorkbook', () => {
-  it('прежние 10 колонок при наборе по умолчанию', () => {
-    const ws = buildStaffViewWorkbook([ROW], STAFF_VIEW_DEFAULT_COLUMNS).worksheets[0];
+  const WITH_SIGN = { withSign: true };
+  const WITHOUT_SIGN = { withSign: false };
+
+  it('прежние 10 колонок при наборе по умолчанию во «Все»', () => {
+    const ws = buildStaffViewWorkbook([ROW], STAFF_VIEW_DEFAULT_COLUMNS, WITH_SIGN).worksheets[0];
     expect(headers(ws)).toEqual([
       '№', 'ФИО', 'Отдел', 'Должность', 'Дата трудоустройства', 'Дата рождения', 'График', 'Объект', 'Комментарий', 'Признак',
     ]);
@@ -48,8 +51,16 @@ describe('buildStaffViewWorkbook', () => {
     expect(ws.getColumn(10).width).toBe(12);
   });
 
+  it('«Активные» и «Уволенные» — без «Признака», как на экране', () => {
+    const ws = buildStaffViewWorkbook([ROW], STAFF_VIEW_DEFAULT_COLUMNS, WITHOUT_SIGN).worksheets[0];
+    expect(headers(ws)).toEqual([
+      '№', 'ФИО', 'Отдел', 'Должность', 'Дата трудоустройства', 'Дата рождения', 'График', 'Объект', 'Комментарий',
+    ]);
+    expect(ws.getRow(2).values as unknown[]).not.toContain('Работает');
+  });
+
   it('участок — между отделом и должностью, защищён от формул, ширины по ключам', () => {
-    const ws = buildStaffViewWorkbook([ROW], STAFF_VIEW_OPTIONAL_COLUMNS).worksheets[0];
+    const ws = buildStaffViewWorkbook([ROW], STAFF_VIEW_OPTIONAL_COLUMNS, WITH_SIGN).worksheets[0];
     expect(headers(ws).slice(0, 5)).toEqual(['№', 'ФИО', 'Отдел', 'Участок', 'Должность']);
     expect(ws.getRow(2).getCell(4).value).toBe("'=Журавлев В. С.");
     expect(ws.getColumn(4).width).toBe(28);
@@ -57,14 +68,15 @@ describe('buildStaffViewWorkbook', () => {
     expect(headers(ws)).toHaveLength(11);
   });
 
-  it('только №, ФИО, Признак', () => {
-    const ws = buildStaffViewWorkbook([ROW], []).worksheets[0];
+  it('только №, ФИО, Признак во «Все»; только №, ФИО — на других вкладках', () => {
+    const ws = buildStaffViewWorkbook([ROW], [], WITH_SIGN).worksheets[0];
     expect(headers(ws)).toEqual(['№', 'ФИО', 'Признак']);
     expect(ws.getRow(2).getCell(3).value).toBe('Работает');
+    expect(headers(buildStaffViewWorkbook([ROW], [], WITHOUT_SIGN).worksheets[0])).toEqual(['№', 'ФИО']);
   });
 
   it('после перестановки даты остаются датами, перенос — у комментария', () => {
-    const ws = buildStaffViewWorkbook([ROW], ['birth_date', 'comment']).worksheets[0];
+    const ws = buildStaffViewWorkbook([ROW], ['birth_date', 'comment'], WITH_SIGN).worksheets[0];
     expect(headers(ws)).toEqual(['№', 'ФИО', 'Дата рождения', 'Комментарий', 'Признак']);
     const row = ws.getRow(2);
     expect(row.getCell(3).value).toEqual(new Date(Date.UTC(1990, 4, 17)));

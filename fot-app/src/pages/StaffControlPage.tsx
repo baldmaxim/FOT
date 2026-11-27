@@ -72,10 +72,10 @@ import {
   type StaffTableColumn,
 } from '../utils/staffColumns';
 import { useStaffMonthMovement } from '../hooks/useStaffMonthMovement';
-import { staffCategoryFiltersKey, useStaffCategoryCounts } from '../hooks/useStaffCategoryCounts';
+import { STAFF_CATEGORY_COUNTS_QUERY_KEY, staffCategoryFiltersKey, useStaffCategoryCounts } from '../hooks/useStaffCategoryCounts';
 import { useStaffInactiveAction } from '../hooks/useStaffInactiveAction';
-import type { IStaffCommentSaved, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
-import { affectsActiveFilters, affectsActiveSort, type StaffRowChange } from '../utils/staffRowUpdate';
+import type { IStaffCommentSaved, StaffCategory, StaffPeriod, StaffSortDir, StaffSortKey } from '../services/employeeService';
+import { affectsActiveFilters, affectsActiveSort, affectsStaffCategory, type StaffRowChange } from '../utils/staffRowUpdate';
 import { useStaffSectionDepartments } from '../hooks/useStaffSectionDepartments';
 import { useStaffScheduleAssignments, STAFF_SCHEDULE_ASSIGNMENTS_QUERY_KEY } from '../hooks/useStaffScheduleAssignments';
 import { chunkCellState, type ChunkCellState, type IChunkReadiness } from '../utils/staffInfiniteList';
@@ -103,9 +103,12 @@ import {
   getMoscowISODate,
   handleMiddleClickMouseDown,
   openEmployeeInNewTab,
+  parseStaffCategoryParam,
   parseStaffStatusFilter,
+  resolveStaffCategoryDisplay,
   SCHEDULE_SOURCE_LABELS,
   staffRowActionKind,
+  staffSignVisible,
   toApiStaffStatus,
   type IAddEmployeeForm,
   type IEmployeeScheduleView,
@@ -150,6 +153,8 @@ interface IStaffRowProps {
   index: number;
   /** Столбцы, скрытые шестерёнкой. */
   hiddenColumns: ReadonlySet<StaffTableColumn>;
+  /** «Признак» — только во «Все» (staffSignVisible). */
+  showSign: boolean;
   /** Измерение фактической высоты строки virtualizer'ом (отдел/должность переносятся). */
   measureRef: (element: HTMLTableRowElement | null) => void;
   sideData: IStaffSideData;
@@ -173,7 +178,7 @@ interface IStaffRowProps {
   onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, showSign, measureRef, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
@@ -274,7 +279,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, hiddenColumns, measureR
           <StaffCommentCell employee={emp} onEdit={onEditComment} />
         </td>
       )}
-      <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} /></td>
+      {showSign && <td className="sc-td-sign"><StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} /></td>}
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {/* Действие решает состояние строки (staffRowActionKind): на «Все» уволенному — «Восстановить», а не «Вернуть в табель». */}
         {onReturn && actionKind === 'return' ? (
@@ -927,8 +932,9 @@ interface IVirtualListLoadProps {
 
 interface IVirtualTableProps extends IVirtualListLoadProps {
   filtered: Employee[];
-  /** Столбцы, скрытые шестерёнкой, и заголовки видимых столбцов по порядку. */
+  /** Столбцы, скрытые шестерёнкой, и заголовки видимых столбцов по порядку («Признак» — в них же, только во «Все»). */
   hiddenColumns: ReadonlySet<StaffTableColumn>;
+  showSign: boolean;
   sortOptions: ReadonlyArray<{ key: StaffSortKey; label: string }>;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
@@ -990,6 +996,7 @@ const useVirtualListLoading = (
 const VirtualTable: FC<IVirtualTableProps> = memo(({
   filtered,
   hiddenColumns,
+  showSign,
   sortOptions,
   sideData,
   selectedIds,
@@ -1020,8 +1027,8 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   columnFilters,
   onOpenFilter,
 }) => {
-  // №, ФИО, Признак, действия — всегда; остальные — по шестерёнке.
-  const totalCols = 4 + visibleStaffColumns(hiddenColumns).length + (selectionMode ? 1 : 0);
+  // №, ФИО, действия — всегда; «Признак» — во «Все»; остальные — по шестерёнке.
+  const totalCols = 3 + (showSign ? 1 : 0) + visibleStaffColumns(hiddenColumns).length + (selectionMode ? 1 : 0);
   const shows = (column: StaffTableColumn) => !hiddenColumns.has(column);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -1041,7 +1048,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
     <div className="sc-table-wrap" ref={scrollRef}>
       <table
         className={`sc-table sc-table--staff${selectionMode ? ' sc-table--selecting' : ''}`}
-        style={{ minWidth: staffTableMinWidth(hiddenColumns, selectionMode) }}
+        style={{ minWidth: staffTableMinWidth(hiddenColumns, selectionMode, showSign) }}
       >
         <colgroup>
           {selectionMode && <col className="sc-col-check" />}
@@ -1055,7 +1062,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
           {shows('schedule') && <col className="sc-col-schedule" />}
           {shows('main_object') && <col className="sc-col-main-object" />}
           {shows('comment') && <col className="sc-col-comment" />}
-          <col className="sc-col-sign" />
+          {showSign && <col className="sc-col-sign" />}
           <col className="sc-col-actions" />
         </colgroup>
         <thead>
@@ -1106,6 +1113,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     emp={emp}
                     index={vRow.index}
                     hiddenColumns={hiddenColumns}
+                    showSign={showSign}
                     measureRef={virtualizer.measureElement}
                     sideData={sideData}
                     selectedIds={selectedIds}
@@ -1148,6 +1156,8 @@ interface IVirtualCardsProps extends IVirtualListLoadProps {
   filtered: Employee[];
   /** Столбцы, скрытые шестерёнкой: их строк в карточке нет. */
   hiddenColumns: ReadonlySet<StaffTableColumn>;
+  /** Бейдж «Признака» — только во «Все». */
+  showSign: boolean;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1173,6 +1183,7 @@ const CARD_ESTIMATE = 250;
 const MobileCard: FC<{
   emp: Employee;
   hiddenColumns: ReadonlySet<StaffTableColumn>;
+  showSign: boolean;
   sideData: IStaffSideData;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1191,7 +1202,7 @@ const MobileCard: FC<{
   onReturn?: (emp: Employee) => void;
   onEditComment?: (emp: Employee) => void;
   onInactiveAction?: (emp: Employee, action: StaffInactiveAction) => void;
-}> = memo(({ emp, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
+}> = memo(({ emp, hiddenColumns, showSign, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scheduleView = sideData.scheduleViews.get(emp.id);
   const scheduleState = chunkCellState(emp.id, sideData.scheduleReadiness);
   const mainState = chunkCellState(emp.id, sideData.mainReadiness);
@@ -1220,7 +1231,7 @@ const MobileCard: FC<{
               Исключён
             </span>
           )}
-          <StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} />
+          {showSign && <StaffSignBadge sign={emp.sign} inactiveAt={emp.staff_inactive_at} />}
         </div>
         {selectionMode && (
           <div className="sc-card-check" onClick={e => e.stopPropagation()}>
@@ -1354,7 +1365,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, showSign, sideData, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onLoadMore, resetKey, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn, onEditComment, onInactiveAction }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1383,6 +1394,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, hiddenColumns, si
               <MobileCard
                 emp={emp}
                 hiddenColumns={hiddenColumns}
+                showSign={showSign}
                 sideData={sideData}
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}
@@ -1505,10 +1517,18 @@ export const StaffControlPage: FC = () => {
     return isStaffSection(fromUrl) ? fromUrl : null;
   });
   const [statusFilter, setStatusFilter] = useState<StaffStatusFilter>(() => parseStaffStatusFilter(urlParams.get('status')));
+  // Группа плашки (ИТР / Рабочие / Остальные): клик по ней оставляет в таблице только её; null — все.
+  const [category, setCategory] = useState<StaffCategory | null>(() => parseStaffCategoryParam(urlParams.get('category')));
+  // «Признак» — только во «Все».
+  const showSign = staffSignVisible(statusFilter);
   // Столбцы, скрытые шестерёнкой, читаются до сортировки и фильтров: условие из URL по скрытому
   // столбцу не применяется — иначе список сортировался бы и фильтровался по невидимому столбцу.
+  // То же у «Признака» вне «Все» (старые ссылки с sort=sign на «Активных»).
   const [initialHiddenColumns] = useState(loadHiddenStaffColumns);
-  const isHiddenOnLoad = (key: string | null): boolean => isStaffTableColumn(key) && initialHiddenColumns.has(key);
+  const [signOnLoad] = useState(() => staffSignVisible(parseStaffStatusFilter(urlParams.get('status'))));
+  const isHiddenOnLoad = (key: string | null): boolean => (
+    (isStaffTableColumn(key) && initialHiddenColumns.has(key)) || (key === 'sign' && !signOnLoad)
+  );
   const [sortKey, setSortKey] = useState<StaffSortKey>(() => {
     const fromUrl = urlParams.get('sort');
     return isStaffSortKey(fromUrl) && !isHiddenOnLoad(fromUrl) ? fromUrl : 'name';
@@ -1525,7 +1545,10 @@ export const StaffControlPage: FC = () => {
     return null;
   });
   // Фильтры столбцов (воронки в заголовках); сериализованная форма — в URL, query key и запросы.
-  const [columnFilters, setColumnFilters] = useState<IStaffColumnFilters>(() => [...initialHiddenColumns].reduce(
+  const [columnFilters, setColumnFilters] = useState<IStaffColumnFilters>(() => [
+    ...initialHiddenColumns,
+    ...(signOnLoad ? [] : ['sign' as const]),
+  ].reduce(
     (filters, column) => (isColumnFilterActive(filters, column) ? setColumnFilter(filters, column, null) : filters),
     parseColumnFilters(urlParams.get('cf')),
   ));
@@ -1593,6 +1616,7 @@ export const StaffControlPage: FC = () => {
     departments,
     countsByDepartment,
     loading,
+    listSettling,
     isFirstPageError,
     firstPageError,
     retryFirstPage,
@@ -1614,6 +1638,7 @@ export const StaffControlPage: FC = () => {
     dir: sortDir,
     period: period ?? undefined,
     cf: columnFiltersKey,
+    category: category ?? undefined,
     enabled: sectionChoice !== null || scopeKnown,
     allEmployees: hasAllEmployees,
   });
@@ -1670,9 +1695,22 @@ export const StaffControlPage: FC = () => {
     handleColumnHidden,
   );
   const visibleSortOptions = useMemo(
-    () => STAFF_SORT_OPTIONS.filter(option => !(isStaffTableColumn(option.key) && hiddenColumns.has(option.key))),
-    [hiddenColumns],
+    () => STAFF_SORT_OPTIONS.filter(option => (
+      !(isStaffTableColumn(option.key) && hiddenColumns.has(option.key)) && (option.key !== 'sign' || showSign)
+    )),
+    [hiddenColumns, showSign],
   );
+  // Ушли со «Все» (переключатель, чип месяца, нормализация вкладки по правам): «Признака» больше нет — снимаем его
+  // сортировку, фильтр и открытое окно фильтра, иначе таблица сортировалась бы и резалась по невидимому столбцу.
+  useEffect(() => {
+    if (showSign) return;
+    if (sortKey === 'sign') {
+      setSortKey('name');
+      setSortDir('asc');
+    }
+    setColumnFilters(prev => (isColumnFilterActive(prev, 'sign') ? setColumnFilter(prev, 'sign', null) : prev));
+    setOpenFilter(prev => (prev?.column === 'sign' ? null : prev));
+  }, [showSign, sortKey]);
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   /** Закрытие меню возвращает фокус на шестерёнку — клавиатура не теряет место. */
   const closeColumnsMenu = useCallback(() => {
@@ -1702,6 +1740,7 @@ export const StaffControlPage: FC = () => {
     search: debouncedSearch,
     scheduleId: scheduleFilter,
     cf: columnFiltersKey,
+    category,
     enabled: (sectionChoice !== null || scopeKnown) && canViewFired,
   });
 
@@ -1808,8 +1847,9 @@ export const StaffControlPage: FC = () => {
     }
     if (period) p.set('period', period);
     if (columnFiltersKey) p.set('cf', columnFiltersKey);
+    if (category) p.set('category', category);
     setUrlParams(p, { replace: true });
-  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, statusFilter, sortKey, sortDir, period, columnFiltersKey, setUrlParams]);
+  }, [deptId, debouncedSearch, scheduleFilter, sectionChoice, statusFilter, sortKey, sortDir, period, columnFiltersKey, category, setUrlParams]);
 
   // history panel
   const [panelEmp, setPanelEmp] = useState<Employee | null>(null);
@@ -2017,7 +2057,7 @@ export const StaffControlPage: FC = () => {
   }, []);
 
   // Прокрутка к началу — только при смене фактических фильтров и сортировки, не при догрузке порций.
-  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}|${columnFiltersKey}`;
+  const listResetKey = `${section}|${deptId}|${scheduleFilter}|${debouncedSearch}|${statusFilter}|${sortKey}|${sortDir}|${period ?? ''}|${columnFiltersKey}|${category ?? ''}`;
 
   // «Уволенные» и период «с начала месяца» — только тем, у кого есть переключатель и чипы:
   // ?status=fired / ?period=… из чужой ссылки сбрасываются.
@@ -2040,11 +2080,16 @@ export const StaffControlPage: FC = () => {
    */
   const applyRowChange = useCallback((empId: number, patch: Partial<Employee>, changes: readonly StaffRowChange[]) => {
     patchEmployee(empId, patch);
+    // Отдел или должность могут перенести строку в другую группу плашки: разбивку перечитать, при выбранной
+    // группе — и список (строка могла из неё выпасть).
+    const categoryChanged = affectsStaffCategory(changes);
+    if (categoryChanged) void queryClient.invalidateQueries({ queryKey: STAFF_CATEGORY_COUNTS_QUERY_KEY });
     if (affectsActiveSort(changes, sortKey)
-      || affectsActiveFilters(changes, column => isColumnFilterActive(columnFilters, column))) {
+      || affectsActiveFilters(changes, column => isColumnFilterActive(columnFilters, column))
+      || (categoryChanged && category !== null)) {
       reloadFromStart();
     }
-  }, [patchEmployee, reloadFromStart, sortKey, columnFilters]);
+  }, [patchEmployee, reloadFromStart, sortKey, columnFilters, category, queryClient]);
 
   const handleCommentSaved = useCallback((emp: Employee, saved: IStaffCommentSaved) => {
     applyRowChange(emp.id, {
@@ -2430,6 +2475,8 @@ export const StaffControlPage: FC = () => {
       status: 'working',
       period: period === 'hired_month' ? period : undefined,
       cf: columnFiltersKey || undefined,
+      // Выбранная группа плашки: график получают ровно строки таблицы.
+      category: category ?? undefined,
       view: 'list',
     });
     const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
@@ -2442,7 +2489,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, period, columnFiltersKey, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, section, period, columnFiltersKey, category, refreshAfterEmployeeChange, scheduleChangeAffectsList, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (
     departmentIds: string[],
@@ -2620,6 +2667,7 @@ export const StaffControlPage: FC = () => {
         sort: sortKey,
         dir: sortDir,
         cf: columnFiltersKey || undefined,
+        category: category ?? undefined,
         columns: visibleStaffColumns(hiddenColumns),
       });
       triggerBlobDownload(blob, filename);
@@ -2628,7 +2676,7 @@ export const StaffControlPage: FC = () => {
     } finally {
       setIsExportingView(false);
     }
-  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, columnFiltersKey, hiddenColumns, toast]);
+  }, [isExportingView, debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, sortKey, sortDir, columnFiltersKey, category, hiddenColumns, toast]);
 
   // Параметры экрана для вариантов значений в фильтре столбца (сервер не применяет фильтр самого столбца).
   const filterViewParams = useMemo(() => ({
@@ -2639,7 +2687,8 @@ export const StaffControlPage: FC = () => {
     status: toApiStaffStatus(statusFilter),
     period: period ?? undefined,
     cf: columnFiltersKey || undefined,
-  }), [debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, columnFiltersKey]);
+    category: category ?? undefined,
+  }), [debouncedSearch, deptId, scheduleFilter, section, statusFilter, period, columnFiltersKey, category]);
 
   const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
     const items: IOverflowMenuItem[] = [];
@@ -2674,8 +2723,9 @@ export const StaffControlPage: FC = () => {
     return items;
   }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, total, canEditTimesheetOffice]);
 
-  // ИТР / Рабочие / Остальные (миграция 381) — те же фильтры, статус и период, что у таблицы. Показываем только
-  // числа ровно этого набора: список при смене фильтров держит прежние строки, а разбивка приходит отдельно.
+  // ИТР / Рабочие / Остальные (миграция 381) — те же фильтры, статус и период, что у таблицы, но без выбранной группы:
+  // иначе две другие кнопки показали бы нули. Показываем только числа ровно этого набора (ключ фильтров сверен),
+  // а сверку с числом строк таблицы — resolveStaffCategoryDisplay.
   const categoryCountsParams = {
     section,
     departmentId: deptId,
@@ -2690,11 +2740,30 @@ export const StaffControlPage: FC = () => {
     enabled: sectionChoice !== null || scopeKnown,
   });
   const categoryData = categoryCountsQuery.data;
-  const categoryCounts = categoryData
-    && categoryData.filtersKey === staffCategoryFiltersKey(categoryCountsParams)
-    && categoryData.counts.total === total
-    ? categoryData.counts
-    : null;
+  const categoryFiltersKey = staffCategoryFiltersKey(categoryCountsParams);
+  const categoryDisplay = resolveStaffCategoryDisplay({
+    counts: categoryData && categoryData.filtersKey === categoryFiltersKey ? categoryData.counts : null,
+    total,
+    category,
+    listSettling,
+  });
+  const categoryCounts = categoryDisplay.counts;
+  // Число на кнопке разошлось с таблицей (кого-то приняли или уволили между запросами): перечитать разбивку — один раз
+  // на набор (фильтры, группа, число строк), чтобы не зациклиться, если разошёлся сам список.
+  const categoryStaleKey = categoryDisplay.stale ? `${categoryFiltersKey}|${category ?? ''}|${total}` : null;
+  const categoryRefetchedRef = useRef<string | null>(null);
+  const { refetch: refetchCategoryCounts } = categoryCountsQuery;
+  useEffect(() => {
+    if (!categoryStaleKey || categoryRefetchedRef.current === categoryStaleKey) return;
+    categoryRefetchedRef.current = categoryStaleKey;
+    void refetchCategoryCounts();
+  }, [categoryStaleKey, refetchCategoryCounts]);
+  // Разбивка не загрузилась — кнопок нет, и снять группу было бы нечем: таблица возвращается ко всем строкам вкладки.
+  const categoryCountsFailed = categoryCountsQuery.isError && !categoryCounts;
+  useEffect(() => {
+    if (categoryCountsFailed && category !== null) setCategory(null);
+  }, [categoryCountsFailed, category]);
+  const handleCategorySelect = useCallback((next: StaffCategory | null) => setCategory(next), []);
 
   // Действия строки решает её состояние; вкладка лишь ограничивает набор: на «Все» есть и неуволенные, и уволенные.
   const rowsMayBeWorking = statusFilter === 'active' || statusFilter === 'all';
@@ -2703,12 +2772,18 @@ export const StaffControlPage: FC = () => {
   const canManageStaffInactive = profile?.can_manage_staff_inactive === true;
   const inactiveAction = useStaffInactiveAction(refreshAfterEmployeeChange);
 
+  // Плашка в шапке: первое число — вся вкладка (кнопка «все»), за ним группы. На узком экране в шапке только число,
+  // кнопки — строкой под фильтрами (CSS: .sc-category-counts--header / --row).
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
-      {total}
-      {categoryCounts && <StaffCategoryCounts counts={categoryCounts} />}
+      {categoryCounts ? (
+        <>
+          <span className="sc-page-counter-number">{categoryCounts.total}</span>
+          <StaffCategoryCounts counts={categoryCounts} category={category} onSelect={handleCategorySelect} variant="header" />
+        </>
+      ) : total}
     </span>
-  ), [total, categoryCounts]);
+  ), [total, categoryCounts, category, handleCategorySelect]);
   useHeaderAddon(headerCounter);
 
   const controlsBar = (
@@ -2809,8 +2884,10 @@ export const StaffControlPage: FC = () => {
       {/* Вторая строка панели: «С 1 сентября 2026: Устроены +N · Уволены −N», фильтры столбцов. */}
       {(canViewFired || isMobile || activeColumnFilterCount > 0) && (
         <div className="sc-movement-row">
-          {/* На узком экране разбивке нет места в шапке — она здесь (CSS: .sc-category-counts--row). */}
-          {categoryCounts && <StaffCategoryCounts counts={categoryCounts} className="sc-category-counts--row" />}
+          {/* На узком экране кнопкам нет места в шапке — они здесь чипами (CSS: .sc-category-counts--row). */}
+          {categoryCounts && (
+            <StaffCategoryCounts counts={categoryCounts} category={category} onSelect={handleCategorySelect} variant="row" />
+          )}
           {canViewFired && (
             <StaffMonthMovement
               data={monthMovement.data}
@@ -2892,6 +2969,7 @@ export const StaffControlPage: FC = () => {
         <VirtualCards
           filtered={employees}
           hiddenColumns={hiddenColumns}
+          showSign={showSign}
           sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
@@ -2917,6 +2995,7 @@ export const StaffControlPage: FC = () => {
         <VirtualTable
           filtered={employees}
           hiddenColumns={hiddenColumns}
+          showSign={showSign}
           sortOptions={visibleSortOptions}
           sideData={sideData}
           selectedIds={selectedEmployeeIdSet}
@@ -3030,7 +3109,7 @@ export const StaffControlPage: FC = () => {
           anchor={columnsAnchor}
           columns={STAFF_TABLE_COLUMNS}
           hidden={hiddenColumns}
-          fixedNote="«№», «ФИО» и «Признак» показываются всегда"
+          fixedNote={showSign ? '«№», «ФИО» и «Признак» показываются всегда' : '«№» и «ФИО» показываются всегда'}
           onToggle={setColumnVisible}
           onShowAll={showAllColumns}
           onClose={closeColumnsMenu}

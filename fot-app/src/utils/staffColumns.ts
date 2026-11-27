@@ -3,7 +3,7 @@
  * поэтому хранится в localStorage; недоступное или битое хранилище = столбцы по умолчанию.
  */
 
-/** Столбцы, которые можно скрыть. «№», «ФИО», «Признак» и кнопки действий видны всегда. */
+/** Столбцы, которые можно скрыть. «№», «ФИО» и кнопки действий видны всегда, «Признак» — во вкладке «Все». */
 export type StaffTableColumn =
   | 'department' | 'site' | 'position' | 'hire_date' | 'birth_date' | 'schedule' | 'main_object' | 'comment';
 
@@ -85,11 +85,14 @@ const COLUMN_WIDTH: Record<StaffTableColumn, number> = {
   main_object: 140,
   comment: 140,
 };
-/** №, ФИО, Признак, действия. */
-const FIXED_WIDTH = 60 + 220 + 130 + 140;
+/** №, ФИО, действия. */
+const FIXED_WIDTH = 60 + 220 + 140;
+/** «Признак» — только во «Все». */
+const SIGN_WIDTH = 130;
 const CHECK_WIDTH = 44;
 
-export const staffTableMinWidth = (hidden: ReadonlySet<StaffTableColumn>, selectionMode: boolean): number =>
+export const staffTableMinWidth = (hidden: ReadonlySet<StaffTableColumn>, selectionMode: boolean, showSign: boolean): number =>
   FIXED_WIDTH
+  + (showSign ? SIGN_WIDTH : 0)
   + (selectionMode ? CHECK_WIDTH : 0)
   + visibleStaffColumns(hidden).reduce((sum, key) => sum + COLUMN_WIDTH[key], 0);

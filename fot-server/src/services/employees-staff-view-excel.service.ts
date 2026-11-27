@@ -1,7 +1,8 @@
 /**
  * «Управление кадрами → Экспорт»: xlsx ровно текущей таблицы. Один лист, без мета-строк,
  * колонки — видимые на экране в порядке экрана, строки — в порядке сортировки экрана,
- * № — после сортировки. «№», «ФИО» и «Признак» выгружаются всегда.
+ * № — после сортировки. «№» и «ФИО» выгружаются всегда, «Признак» — как на экране, только во «Все»
+ * (на «Активных» и «Уволенных» он у всех одинаковый, решение 27.11.2026).
  */
 import ExcelJS from 'exceljs';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
@@ -30,7 +31,7 @@ const MAX_COLUMNS_PARAM_LENGTH = 200;
 export type StaffViewColumnsParseResult = { ok: true; columns: StaffViewOptionalColumn[] } | { ok: false };
 
 /**
- * columns — ключи через запятую. Нет параметра — прежний набор; '' — только «№», «ФИО», «Признак»;
+ * columns — ключи через запятую. Нет параметра — прежний набор; '' — только «№», «ФИО» (и «Признак» во «Все»);
  * повтор параметра, лишняя длина или неизвестный ключ — ошибка. Порядок — всегда порядок экрана.
  */
 export function parseStaffViewColumns(raw: unknown): StaffViewColumnsParseResult {
@@ -77,10 +78,18 @@ const COLUMNS: Record<StaffViewColumnKey, IStaffViewColumn> = {
   sign: { key: 'sign', name: 'Признак', width: 12 },
 };
 
-/** Колонки файла: фиксированные + выбранные, в порядке экрана. */
-export function staffViewColumns(selected: readonly StaffViewOptionalColumn[]): IStaffViewColumn[] {
+export interface IStaffViewWorkbookOptions {
+  /** Столбец «Признак» — только во «Все» (status=all), как на экране. */
+  withSign: boolean;
+}
+
+/** Колонки файла: фиксированные + выбранные, в порядке экрана; «Признак» последним — только во «Все». */
+export function staffViewColumns(
+  selected: readonly StaffViewOptionalColumn[],
+  { withSign }: IStaffViewWorkbookOptions,
+): IStaffViewColumn[] {
   const optional = STAFF_VIEW_OPTIONAL_COLUMNS.filter(column => selected.includes(column));
-  return [COLUMNS.num, COLUMNS.name, ...optional.map(column => COLUMNS[column]), COLUMNS.sign];
+  return [COLUMNS.num, COLUMNS.name, ...optional.map(column => COLUMNS[column]), ...(withSign ? [COLUMNS.sign] : [])];
 }
 
 const cellValue = (key: StaffViewColumnKey, row: IStaffViewExportRow, index: number): ExcelJS.CellValue => {
@@ -102,8 +111,9 @@ const cellValue = (key: StaffViewColumnKey, row: IStaffViewExportRow, index: num
 export function buildStaffViewWorkbook(
   rows: readonly IStaffViewExportRow[],
   selected: readonly StaffViewOptionalColumn[],
+  options: IStaffViewWorkbookOptions,
 ): ExcelJS.Workbook {
-  const columns = staffViewColumns(selected);
+  const columns = staffViewColumns(selected, options);
   const workbook = new ExcelJS.Workbook();
   const ws = workbook.addWorksheet('Сотрудники');
   columns.forEach((column, index) => {
