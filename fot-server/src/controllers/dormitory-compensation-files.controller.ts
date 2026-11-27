@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import * as Sentry from '@sentry/node';
+import axios from 'axios';
 
 import { withTransaction } from '../config/postgres.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
@@ -21,7 +22,7 @@ import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import { SCHEDULE_FILE_TYPES_HINT, detectScheduleFileType, scheduleFileName } from '../utils/schedule-file-type.js';
 import { canWriteStay, rosterEmployeeIds } from './dormitory-access.js';
 
-// «Компенсация аренды» → файлы сотрудника (миграция 380): список, ссылка по клику, загрузка, удаление. Права страницы
+// «Компенсация аренды» → файлы сотрудника (миграция 380): список, ссылка по клику, файл для печати, загрузка, удаление. Права страницы
 // проверяет роутер (просмотр — view, загрузка и удаление — edit «Проживания»); здесь — охват сотрудника (как список
 // компенсации: rosterEmployeeIds, запись — canWriteStay), есть ли у него компенсация, предел и хранилище. Образец —
 // файлы шаблонов графиков (schedule-files.controller.ts, 376).
@@ -32,6 +33,8 @@ interface MulterRequest extends AuthenticatedRequest {
 
 const ENTITY_TYPE = 'employee';
 const FILE_URL_TTL_SECONDS = 300;
+/** Файл до 25 МБ из R2 для «Печати». */
+const FILE_FETCH_TIMEOUT_MS = 30_000;
 
 const BAD_EMPLOYEE = { success: false, error: 'Некорректный сотрудник' };
 const BAD_FILE_ID = { success: false, error: 'Некорректный файл' };
@@ -124,6 +127,47 @@ const fileUrl = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     res.json({ success: true, data: { url } });
   } catch (err) {
     console.error('[compensation-files] url error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения файла' });
+  }
+};
+
+/**
+ * GET /api/dormitory/compensation/:employeeId/files/:fileId/content — сам файл с домена портала (кнопка «Печать»
+ * просмотра, 27.11.2026): PDF по ссылке R2 — чужой домен, его iframe из скрипта не распечатать. Охват — как у ссылки.
+ */
+const content = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const fileId = parsePositiveId(req.params.fileId);
+    if (fileId === null) {
+      res.status(400).json(BAD_FILE_ID);
+      return;
+    }
+    const access = await resolveEmployee(req, 'view');
+    if (!access.ok) {
+      res.status(access.status).json(access.body);
+      return;
+    }
+    const file = await getCompensationFileObject(access.employeeId, fileId);
+    if (!file) {
+      res.status(404).json(FILE_NOT_FOUND);
+      return;
+    }
+    if (!(await r2Service.isEnabledAsync())) {
+      res.status(503).json(NO_STORAGE);
+      return;
+    }
+    const url = await r2Service.generateDownloadUrl(file.r2_key, undefined, 'inline', FILE_URL_TTL_SECONDS);
+    const object = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: FILE_FETCH_TIMEOUT_MS });
+    const bytes = Buffer.from(object.data);
+    const encodedName = encodeURIComponent(file.file_name).replace(/'/g, '%27');
+    res.setHeader('Content-Type', file.mime_type);
+    res.setHeader('Content-Length', String(bytes.length));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="file"; filename*=UTF-8''${encodedName}`);
+    res.end(bytes);
+  } catch (err) {
+    console.error('[compensation-files] content error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения файла' });
   }
 };
@@ -258,6 +302,7 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 export const dormitoryCompensationFilesController = {
   list,
   fileUrl,
+  content,
   upload,
   remove,
 };

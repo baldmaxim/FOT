@@ -382,6 +382,15 @@ export const dormitoryService = {
     return res.data.url;
   },
 
+  /**
+   * Файл с домена портала — для «Печати» просмотра (27.11.2026): PDF по ссылке R2 (чужой домен) из скрипта не
+   * распечатать. Возвращает blob:-ссылку — освобождает вызывающий.
+   */
+  getCompensationFileBlobUrl: async (employeeId: number, fileId: number): Promise<string> => {
+    const { blob } = await apiClient.download(`/dormitory/compensation/${employeeId}/files/${fileId}/content`, 'file');
+    return URL.createObjectURL(blob);
+  },
+
   /** Прикрепить один файл (до 25 МБ). */
   uploadCompensationFile: async (employeeId: number, file: File): Promise<ICompensationFile> => {
     const form = new FormData();

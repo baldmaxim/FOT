@@ -15,6 +15,8 @@ interface IFilePreviewModalProps {
    * disposition='inline' — для предпросмотра, 'attachment' — для скачивания.
    */
   urlLoader?: (disposition: FileDisposition) => Promise<string>;
+  /** Задан — в шапке «Печать» (картинка, PDF); ссылка своего домена, см. FileViewer. */
+  printUrlLoader?: () => Promise<string>;
 }
 
 /** Просмотр файла отдельным окном: оболочка модалки вокруг общего [FileViewer]. */
@@ -24,6 +26,7 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   mimeType,
   onClose,
   urlLoader,
+  printUrlLoader,
 }) => {
   const loadUrl = useCallback(
     (disposition: FileDisposition): Promise<string> => {
@@ -39,7 +42,14 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   return (
     <ModalShell onClose={onClose} overlayClassName={styles.overlay} containerClassName={styles.container}>
       {({ requestClose }) => (
-        <FileViewer fileName={fileName} mimeType={mimeType} loadUrl={loadUrl} onClose={requestClose} safeAreaTop />
+        <FileViewer
+          fileName={fileName}
+          mimeType={mimeType}
+          loadUrl={loadUrl}
+          onClose={requestClose}
+          safeAreaTop
+          {...(printUrlLoader ? { loadPrintUrl: printUrlLoader } : {})}
+        />
       )}
     </ModalShell>
   );

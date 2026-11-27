@@ -44,6 +44,7 @@ router.get('/compensation', dormitoryView, residents.compensation);
 // Миграция 380: файлы компенсации аренды сотрудника (📎 в таблице и блок «Файлы» в окне).
 router.get('/compensation/:employeeId/files', dormitoryView, compensationFiles.list);
 router.get('/compensation/:employeeId/files/:fileId/url', dormitoryView, compensationFiles.fileUrl);
+router.get('/compensation/:employeeId/files/:fileId/content', dormitoryView, compensationFiles.content);
 router.post('/compensation/:employeeId/files', dormitoryEdit, acceptMemoFile, compensationFiles.upload);
 router.delete('/compensation/:employeeId/files/:fileId', dormitoryEdit, compensationFiles.remove);
 // Вкладка «Квартира»: служебные квартиры и их жильцы.

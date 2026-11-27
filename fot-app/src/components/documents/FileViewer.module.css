@@ -164,9 +164,45 @@
   font-family: inherit;
 }
 
+/* «Печать» готовит файл: кнопка не disabled (фокус после печати возвращается на неё), только приглушена. */
+.iconBtn[aria-busy='true'] {
+  opacity: 0.4;
+  cursor: progress;
+}
+
+/* «Печать» не удалась — строкой под шапкой, просмотр остаётся. */
+.printError {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--error);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Скрытый iframe печати (printFile.ts): на экране не виден, печатается только его документ. */
+.printFrame {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border: 0;
+  visibility: hidden;
+}
+
 @media (max-width: 430px) {
   .iconBtn {
     width: 40px;
     height: 40px;
+  }
+
+  /* С «Печатью» у картинки семь кнопок и процент зума: процент прячем и сужаем промежутки, чтобы шапка влезла в 360 px. */
+  .actionsWithPrint {
+    gap: 2px;
+  }
+
+  .actionsWithPrint .zoomLabel {
+    display: none;
   }
 }

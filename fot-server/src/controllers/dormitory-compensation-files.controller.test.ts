@@ -25,6 +25,9 @@ vi.mock('../services/audit.service.js', () => ({
   },
 }));
 
+const { axiosGet } = vi.hoisted(() => ({ axiosGet: vi.fn() }));
+vi.mock('axios', () => ({ default: { get: axiosGet } }));
+
 const { txClient } = vi.hoisted(() => ({ txClient: { tag: 'tx-client' } }));
 vi.mock('../config/postgres.js', () => ({
   withTransaction: vi.fn(async (fn: (client: unknown) => Promise<unknown>) => fn(txClient)),
@@ -48,12 +51,14 @@ vi.mock('../services/dormitory-compensation-files.service.js', () => ({ COMPENSA
 
 import { dormitoryCompensationFilesController as c } from './dormitory-compensation-files.controller.js';
 
-type ResMock = Response & { statusCode: number; body: unknown };
+type ResMock = Response & { statusCode: number; body: unknown; headers: Record<string, string>; sent?: Buffer };
 const makeRes = (): ResMock => {
-  const res = {} as ResMock;
+  const res = { headers: {} } as ResMock;
   res.statusCode = 200;
   res.status = vi.fn((code: number) => { res.statusCode = code; return res; }) as never;
   res.json = vi.fn((payload: unknown) => { res.body = payload; return res; }) as never;
+  res.setHeader = vi.fn((name: string, value: string) => { res.headers[name] = value; return res; }) as never;
+  res.end = vi.fn((chunk?: Buffer) => { res.sent = chunk; return res; }) as never;
   return res;
 };
 
@@ -118,6 +123,42 @@ describe('просмотр', () => {
     const bad = makeRes();
     await c.list(req({ employeeId: 'abc' }), bad);
     expect(bad.statusCode).toBe(400);
+  });
+
+  it('файл для печати: байты своим доменом с типом и именем; вне охвата — 403 без R2; чужой файл — 404', async () => {
+    svc.getCompensationFileObject.mockResolvedValueOnce({
+      id: 5, file_name: 'Скан договора.pdf', mime_type: 'application/pdf', r2_key: 'dormitory-compensation/822/k.pdf',
+    });
+    axiosGet.mockResolvedValueOnce({ data: PDF_BYTES.buffer.slice(PDF_BYTES.byteOffset, PDF_BYTES.byteOffset + PDF_BYTES.length) });
+    const res = makeRes();
+    await c.content(req({ employeeId: '822', fileId: '5' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(svc.getCompensationFileObject).toHaveBeenCalledWith(822, 5);
+    expect(r2Mock.generateDownloadUrl).toHaveBeenCalledWith('dormitory-compensation/822/k.pdf', undefined, 'inline', 300);
+    expect(axiosGet).toHaveBeenCalledWith('https://signed', expect.objectContaining({ responseType: 'arraybuffer' }));
+    expect(res.sent?.equals(PDF_BYTES)).toBe(true);
+    expect(res.headers).toEqual(expect.objectContaining({
+      'Content-Type': 'application/pdf',
+      'Content-Length': String(PDF_BYTES.length),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `inline; filename="file"; filename*=UTF-8''${encodeURIComponent('Скан договора.pdf')}`,
+    }));
+
+    const foreign = makeRes();
+    await c.content(req({ employeeId: '999', fileId: '5' }), foreign);
+    expect(foreign.statusCode).toBe(403);
+
+    svc.getCompensationFileObject.mockResolvedValueOnce(null);
+    const other = makeRes();
+    await c.content(req({ employeeId: '822', fileId: '77' }), other);
+    expect(other.statusCode).toBe(404);
+
+    const bad = makeRes();
+    await c.content(req({ employeeId: '822', fileId: 'x' }), bad);
+    expect(bad.statusCode).toBe(400);
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+    expect(r2Mock.generateDownloadUrl).toHaveBeenCalledTimes(1);
   });
 
   it('вся организация (охват null) — можно', async () => {

@@ -19,7 +19,8 @@ interface ICompensationFileListProps {
 
 /**
  * Файлы компенсации аренды сотрудника (миграция 380): имя, размер, 👁 «Просмотр», ⬇ «Скачать», ✕ (если можно
- * удалять). Ссылка — по клику, на 5 минут. Вид — как у файлов шаблонов графиков (ScheduleFileList).
+ * удалять); в просмотре скана и PDF — «Печать». Ссылка — по клику, на 5 минут. Вид — как у файлов шаблонов графиков
+ * (ScheduleFileList).
  */
 export const CompensationFileList: FC<ICompensationFileListProps> = ({
   employeeId, files, onRemove, disabled = false, onPreviewChange,
@@ -33,6 +34,13 @@ export const CompensationFileList: FC<ICompensationFileListProps> = ({
     (disposition: 'inline' | 'attachment'): Promise<string> => (previewId === null
       ? Promise.reject(new Error('Файл не выбран'))
       : dormitoryService.getCompensationFileUrl(employeeId, previewId, disposition)),
+    [employeeId, previewId],
+  );
+  // «Печать» (27.11.2026) — файл с домена портала: PDF по ссылке R2 из скрипта не распечатать.
+  const loadPrintUrl = useCallback(
+    (): Promise<string> => (previewId === null
+      ? Promise.reject(new Error('Файл не выбран'))
+      : dormitoryService.getCompensationFileBlobUrl(employeeId, previewId)),
     [employeeId, previewId],
   );
 
@@ -111,6 +119,7 @@ export const CompensationFileList: FC<ICompensationFileListProps> = ({
           fileName={preview.file_name}
           mimeType={preview.mime_type}
           urlLoader={loadPreviewUrl}
+          printUrlLoader={loadPrintUrl}
           onClose={closePreview}
         />,
         document.body,

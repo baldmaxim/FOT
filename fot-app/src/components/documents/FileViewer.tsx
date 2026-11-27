@@ -1,7 +1,8 @@
 import { type FC, type ReactNode, type SyntheticEvent, type WheelEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { Download, Maximize, RotateCwSquare, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Download, Maximize, Printer, RotateCwSquare, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { fitImageSize, type IFitSize } from '../../utils/imageFit';
 import styles from './FileViewer.module.css';
+import { printFile } from './printFile';
 
 export type FileDisposition = 'inline' | 'attachment';
 
@@ -28,15 +29,24 @@ interface IFileViewerProps {
   onClose?: () => void;
   /** Отступ под «чёлку»: нужен полноэкранной модалке на телефоне. */
   safeAreaTop?: boolean;
+  /**
+   * Задан — у картинки и PDF кнопка «Печать». Отдаёт ссылку своего домена (blob:) — её освобождает печать:
+   * iframe по ссылке R2 (чужой домен) скрипт распечатать не может.
+   */
+  loadPrintUrl?: () => Promise<string>;
 }
+
+const PRINT_ERROR = 'Не удалось подготовить файл к печати';
 
 /**
  * Просмотр файла: вписывание с учётом поворота, зум колесом и кнопками,
- * поворот на 90°, PDF через iframe, скачивание, фолбэк для остальных типов.
+ * поворот на 90°, PDF через iframe, скачивание, фолбэк для остальных типов; с loadPrintUrl — «Печать».
  * Отдельно от модалки, чтобы тот же просмотрщик работал встроенной панелью
  * рядом с полями (реквизиты сотрудника, как в PassDesk).
  */
-export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, leading, onClose, safeAreaTop = false }) => {
+export const FileViewer: FC<IFileViewerProps> = ({
+  fileName, mimeType, loadUrl, leading, onClose, safeAreaTop = false, loadPrintUrl,
+}) => {
   // Результат привязан к загрузчику: когда файл сменился, прежняя ссылка
   // перестаёт считаться текущей сама — без сброса состояния в эффекте.
   const [result, setResult] = useState<IViewerResult | null>(null);
@@ -48,6 +58,13 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
   const [natural, setNatural] = useState<IFitSize | null>(null);
   const [box, setBox] = useState<IFitSize | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [printing, setPrinting] = useState(false);
+  const printingRef = useRef(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  /** Убрать iframe прошлой печати и освободить её blob. */
+  const printCleanupRef = useRef<(() => void) | null>(null);
+  /** Текущий загрузчик печати: файл сменили или просмотр закрыли, пока готовилась печать, — не печатать. */
+  const printLoaderRef = useRef(loadPrintUrl);
 
   // Сброс зума и поворота при смене файла, чтобы новый открывался вписанным.
   const viewKey = `${url ?? ''}|${fileName}`;
@@ -57,7 +74,19 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
     setZoom(1);
     setRotation(0);
     setNatural(null);
+    setPrintError(null);
   }
+
+  useEffect(() => {
+    printLoaderRef.current = loadPrintUrl;
+  }, [loadPrintUrl]);
+
+  // Закрыли просмотр — iframe печати и blob больше не нужны (у PDF afterprint может не прийти).
+  useEffect(() => () => {
+    printLoaderRef.current = undefined;
+    printCleanupRef.current?.();
+    printCleanupRef.current = null;
+  }, []);
 
   // Доступная область без padding. border-box не меняется от появления
   // скроллбара, поэтому зум не зацикливает пересчёт; offsetWidth не зависит
@@ -131,6 +160,35 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
 
   const isImage = mimeType?.startsWith('image/');
   const isPdf = mimeType === 'application/pdf';
+  const canPrint = Boolean(url && loadPrintUrl && (isImage || isPdf));
+
+  const handlePrint = useCallback(async () => {
+    // Не disabled на время загрузки: кнопка теряла бы фокус, а после печати фокус возвращается на неё.
+    if (!loadPrintUrl || printingRef.current) return;
+    printingRef.current = true;
+    setPrinting(true);
+    setPrintError(null);
+    try {
+      const printUrl = await loadPrintUrl();
+      if (printLoaderRef.current !== loadPrintUrl) {
+        // Пока готовилась печать, файл сменили или просмотр закрыли.
+        if (printUrl.startsWith('blob:')) URL.revokeObjectURL(printUrl);
+        return;
+      }
+      printCleanupRef.current?.();
+      printCleanupRef.current = printFile(printUrl, {
+        pdf: isPdf,
+        rotation,
+        title: fileName,
+        onError: () => setPrintError(PRINT_ERROR),
+      });
+    } catch {
+      setPrintError(PRINT_ERROR);
+    } finally {
+      printingRef.current = false;
+      setPrinting(false);
+    }
+  }, [loadPrintUrl, isPdf, rotation, fileName]);
 
   // Рамка — видимый прямоугольник, картинка поворачивается в её центре.
   const sideways = rotation % 180 !== 0;
@@ -142,7 +200,7 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
       <div className={`${styles.header} ${safeAreaTop ? styles.headerSafe : ''}`}>
         {leading && <div className={styles.leading}>{leading}</div>}
         <span className={styles.title} title={fileName}>{fileName}</span>
-        <div className={styles.actions}>
+        <div className={canPrint ? `${styles.actions} ${styles.actionsWithPrint}` : styles.actions}>
           {url && isImage && (
             <>
               <button type="button" className={styles.iconBtn} onClick={rotate} title="Повернуть на 90°" aria-label="Повернуть на 90°">
@@ -160,6 +218,18 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
               </button>
             </>
           )}
+          {canPrint && (
+            <button
+              type="button"
+              className={styles.iconBtn}
+              onClick={() => { void handlePrint(); }}
+              aria-busy={printing}
+              title="Печать"
+              aria-label="Печать"
+            >
+              <Printer size={16} />
+            </button>
+          )}
           {url && (
             <button type="button" className={styles.iconBtn} onClick={handleDownload} title="Скачать">
               <Download size={16} />
@@ -172,6 +242,7 @@ export const FileViewer: FC<IFileViewerProps> = ({ fileName, mimeType, loadUrl, 
           )}
         </div>
       </div>
+      {printError && <div className={styles.printError} role="alert">{printError}</div>}
       <div
         ref={bodyRef}
         className={showImage ? `${styles.body} ${styles.bodyImage}` : styles.body}
