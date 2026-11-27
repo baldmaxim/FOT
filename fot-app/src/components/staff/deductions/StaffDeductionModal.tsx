@@ -1,7 +1,9 @@
 import { useId, useMemo, useState, type FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 import { ApiError } from '../../../api/client';
 import type {
+  IDeductionViolationObject,
   IStaffDeduction,
   IStaffDeductionKind,
   IStaffDeductionPayload,
@@ -13,6 +15,7 @@ import { oneTimeMonthOptions } from '../../../utils/payrollRegistryForms';
 import {
   amountAfterKindChange,
   deductionDefaultAmount,
+  kindRequiresPlaceDate,
   monthForDismissed,
   parseStaffDeduction,
   withKeptKind,
@@ -23,6 +26,7 @@ import { EmployeeSearchField, type IEmployeeSearchCandidate } from '../../ui/Emp
 import { RegistryFormModal } from '../../ui/registry/RegistryFormModal';
 import styles from '../../ui/registry/RegistryFormModal.module.css';
 import { DeductionKindFields } from './DeductionKindFields';
+import { DeductionViolationFields } from './DeductionViolationFields';
 
 /**
  * Кандидат «Добавить сотрудника»; can_edit false — строка неактивна (нет права на сотрудника); dismissal_date — уволен
@@ -35,6 +39,11 @@ export interface IStaffDeductionEditorApi {
   searchEmployees: (term: string, signal: AbortSignal) => Promise<DeductionCandidate[]>;
   add: (employeeId: number, payload: IStaffDeductionPayload) => Promise<unknown>;
   update: (deductionId: number, payload: IStaffDeductionPayload) => Promise<unknown>;
+  /** Объекты для «Места» нарушения (миграция 383): ключ запроса раздела и загрузка — у каждого свой путь и право. */
+  objects: {
+    key: readonly unknown[];
+    list: (signal: AbortSignal) => Promise<IDeductionViolationObject[]>;
+  };
 }
 
 interface IStaffDeductionModalProps {
@@ -51,11 +60,14 @@ interface IStaffDeductionModalProps {
 
 const isNotEditable = (candidate: DeductionCandidate): boolean => candidate.can_edit === false;
 
+/** Список объектов меняется редко: держим 10 минут, окно открывают часто. */
+const OBJECTS_STALE_MS = 10 * 60_000;
+
 /**
  * «Добавить сотрудника» и ✎ удержания — во вкладке кадров «Удержания» и в «Справочнике» → «Удержания» «Зарплаты»:
- * сотрудник (поиск по ФИО), вид, подвид (список — если у вида есть подвиды; можно «Без подвида»), месяц удержания
- * и сумма — выбор вида или подвида подставляет сумму по умолчанию (подвида, иначе вида). Ошибка сервера — под
- * полями, ввод не теряется.
+ * сотрудник (поиск по ФИО), вид, подвид (список — если у вида есть подвиды; можно «Без подвида»), у вида «Нарушение
+ * техники безопасности» — место, дата и уточнение нарушения (миграция 383), месяц удержания и сумма — выбор вида или
+ * подвида подставляет сумму по умолчанию (подвида, иначе вида). Ошибка сервера — под полями, ввод не теряется.
  */
 export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, kinds, api, raised, onClose, onSaved }) => {
   const errorId = useId();
@@ -66,6 +78,9 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
   const currentMonth = moscowTodayIso().slice(0, 7);
   const [month, setMonth] = useState(deduction?.month ?? currentMonth);
   const [amount, setAmount] = useState(rateAmountInputValue(deduction?.amount));
+  const [objectId, setObjectId] = useState<string | null>(deduction?.violation_object_id ?? null);
+  const [place, setPlace] = useState(deduction?.violation_place ?? '');
+  const [violationDate, setViolationDate] = useState(deduction?.violation_date ?? '');
   const [error, setError] = useState<{ field: StaffDeductionField | null; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -78,6 +93,26 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
 
   // Вид или подвид правки могли удалить из справочника — оставляем их в списках, сервер ответит понятной ошибкой.
   const kindOptions = useMemo(() => withKeptKind(kinds, deduction), [kinds, deduction]);
+
+  // Место и дата нарушения — только у вида с признаком (миграция 383); список объектов грузится тогда же.
+  const requiresPlaceDate = kindRequiresPlaceDate(kindOptions, kindId);
+  const objectsQuery = useQuery({
+    queryKey: api.objects.key,
+    queryFn: ({ signal }) => api.objects.list(signal),
+    enabled: requiresPlaceDate,
+    staleTime: OBJECTS_STALE_MS,
+  });
+  // Объект правки могли убрать в архив — оставляем его в списке.
+  const keptObjectId = deduction?.violation_object_id ?? null;
+  const keptObjectName = deduction?.violation_object_name ?? null;
+  const objectOptions = useMemo(() => {
+    const list = objectsQuery.data;
+    if (!list || keptObjectId === null || list.some(object => object.id === keptObjectId)) return list;
+    return [...list, { id: keptObjectId, name: keptObjectName ?? 'Объект в архиве' }];
+  }, [objectsQuery.data, keptObjectId, keptObjectName]);
+  // Прежняя строка этого вида без места и даты правится, не заполняя их (как на сервере).
+  const legacyEmptyAllowed = isEdit && deduction.kind_id === kindId
+    && !deduction.violation_object_id && !deduction.violation_date;
 
   const clearError = () => setError(null);
   const invalid = (field: StaffDeductionField): true | undefined => (error?.field === field ? true : undefined);
@@ -93,7 +128,21 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
   };
 
   const handleSubmit = async (requestClose: () => void) => {
-    const parsed = parseStaffDeduction({ selected: isEdit || employee !== null, kindId, subkindId, month, amount });
+    const parsed = parseStaffDeduction({
+      selected: isEdit || employee !== null,
+      kindId,
+      subkindId,
+      month,
+      amount,
+      violation: {
+        requiresPlaceDate,
+        objectId,
+        place,
+        date: violationDate,
+        legacyEmptyAllowed,
+        todayIso: moscowTodayIso(),
+      },
+    });
     if (!parsed.ok) {
       setError({ field: parsed.field, message: parsed.message });
       return;
@@ -156,6 +205,22 @@ export const StaffDeductionModal: FC<IStaffDeductionModalProps> = ({ deduction, 
         kindInvalid={error?.field === 'kind'}
         describedBy={error ? errorId : undefined}
       />
+
+      {requiresPlaceDate && (
+        <DeductionViolationFields
+          objects={objectOptions}
+          objectsError={objectsQuery.isError}
+          objectId={objectId}
+          place={place}
+          date={violationDate}
+          onObjectChange={value => { setObjectId(value); clearError(); }}
+          onPlaceChange={value => { setPlace(value); clearError(); }}
+          onDateChange={value => { setViolationDate(value); clearError(); }}
+          disabled={saving}
+          invalidField={error?.field ?? null}
+          describedBy={error ? errorId : undefined}
+        />
+      )}
 
       <div className={styles.dates}>
         <label className={styles.field}>

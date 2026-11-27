@@ -31,6 +31,10 @@ vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 
 vi.mock('../utils/date.utils.js', () => ({ moscowTodayIso: () => '2026-11-10' }));
 
+// Зарплата месяца из 1С (миграция 383: месяц, загруженный из 1С, удержанию не выбрать) — по умолчанию не загружена.
+const paid = vi.hoisted(() => ({ getPaidAmounts: vi.fn() }));
+vi.mock('../services/payroll/payroll-paid.service.js', () => paid);
+
 import { createPlannedDeductionHandlers } from './planned-deduction-handlers.js';
 
 const access = {
@@ -64,6 +68,7 @@ const BODY = { kind_id: 3, amount: 5000, month_from: '2026-11', month_to: '2027-
 
 beforeEach(() => {
   vi.clearAllMocks();
+  paid.getPaidAmounts.mockResolvedValue([]);
   access.canWrite.mockResolvedValue(true);
   service.getPlannedDeduction.mockResolvedValue(ROW);
 });

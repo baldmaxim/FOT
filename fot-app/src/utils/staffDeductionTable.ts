@@ -6,7 +6,8 @@ import { buildExportTable, type IRegistryColumn, type ITableExportSnapshot } fro
 
 /**
  * Таблица удержаний — вкладка «Удержания» «Управления кадрами» и «Удержания» «Справочника» «Зарплаты» (те же записи):
- * столбцы для экрана, сортировки, фильтров и выгрузки в xlsx (общие функции — в tableView.ts).
+ * столбцы для экрана, сортировки, фильтров и выгрузки в xlsx (общие функции — в tableView.ts). «Место» и «Дата
+ * нарушения» (миграция 383) — у вида «Нарушение техники безопасности», у остальных «—».
  */
 
 const orDash = (value: string | null): string => value || '—';
@@ -18,8 +19,18 @@ export const staffDeductionKindLabel = (row: Pick<IStaffDeduction, 'kind_name' |
 
 /** Что показывают столбцы удержания: и помесячное, и строка «Удержаний за месяц» с плановыми (миграция 357). */
 type StaffDeductionCells = Pick<
-  IStaffDeduction, 'full_name' | 'department' | 'position' | 'kind_name' | 'subkind_name' | 'month' | 'amount'
+  IStaffDeduction,
+  | 'full_name' | 'department' | 'position' | 'kind_name' | 'subkind_name' | 'month' | 'amount'
+  | 'violation_object_name' | 'violation_place' | 'violation_date'
 >;
+
+/** Место нарушения (миграция 383): «ЖК Сад 69, корпус 2»; только уточнение — оно; ничего — пусто. */
+export const violationPlaceLabel = (row: Pick<StaffDeductionCells, 'violation_object_name' | 'violation_place'>): string => (
+  [row.violation_object_name, row.violation_place].filter(Boolean).join(', ')
+);
+
+/** «2026-11-25» → «25.11.2026». */
+const isoToDotted = (iso: string): string => iso.split('-').reverse().join('.');
 
 export const staffDeductionColumns = <Row extends StaffDeductionCells>(): Array<IRegistryColumn<Row>> => [
   {
@@ -52,6 +63,23 @@ export const staffDeductionColumns = <Row extends StaffDeductionCells>(): Array<
     width: 200,
     text: staffDeductionKindLabel,
     sortValue: staffDeductionKindLabel,
+  },
+  {
+    key: 'violation_place',
+    label: 'Место',
+    type: 'text',
+    width: 168,
+    text: row => violationPlaceLabel(row) || '—',
+    sortValue: row => violationPlaceLabel(row) || null,
+  },
+  {
+    key: 'violation_date',
+    label: 'Дата нарушения',
+    type: 'text',
+    width: 112,
+    nowrap: true,
+    text: row => (row.violation_date ? isoToDotted(row.violation_date) : '—'),
+    sortValue: row => row.violation_date ?? null,
   },
   {
     key: 'month',

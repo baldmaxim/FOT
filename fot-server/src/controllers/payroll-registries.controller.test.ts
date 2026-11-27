@@ -25,6 +25,10 @@ const stays = vi.hoisted(() => ({
 }));
 vi.mock('../services/dormitory-stays.service.js', () => stays);
 
+// Зарплата месяца из 1С (миграция 383: месяц, загруженный из 1С, удержанию не выбрать) — по умолчанию не загружена.
+const paid = vi.hoisted(() => ({ getPaidAmounts: vi.fn() }));
+vi.mock('../services/payroll/payroll-paid.service.js', () => paid);
+
 const supplements = vi.hoisted(() => ({
   listSupplements: vi.fn(),
   savePlannedSupplement: vi.fn(),
@@ -89,6 +93,9 @@ import { payrollOvertimeStopsController as overtimeStopsC } from './payroll-over
 import { payrollRegistryController as registryC } from './payroll-registry.controller.js';
 import { payrollStaffDeductionsController as deductionsC } from './payroll-staff-deductions.controller.js';
 
+/** Поля нарушения (миграция 383), которых старый клиент не шлёт. */
+const NO_VIOLATION = { violation_object_id: null, violation_place: null, violation_date: null };
+
 const makeRes = () => {
   const res = {
     statusCode: 200,
@@ -107,6 +114,7 @@ const SCOPE = { contractorRootId: 'contractor-root', departmentIds: ['d-1'] };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  paid.getPaidAmounts.mockResolvedValue([]);
   registryScope.resolvePayrollStaffScope.mockResolvedValue(SCOPE);
   payrollScope.resolvePayrollEditPredicate.mockResolvedValue((employeeId: number) => employeeId !== 99);
 });
@@ -240,7 +248,7 @@ describe('«Удержания»: те же записи, что во вклад
     deductions.addDeduction.mockResolvedValue(DEDUCTION);
     const res = await add();
     expect(res.statusCode).toBe(200);
-    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: 9, month: '2026-10', amount: 800 });
+    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: 9, month: '2026-10', amount: 800, ...NO_VIOLATION });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_ADDED',
       expect.objectContaining({
@@ -258,7 +266,7 @@ describe('«Удержания»: те же записи, что во вклад
     const res = makeRes();
     await deductionsC.add(makeReq({ body: withoutSubkind }), res);
     expect(res.statusCode).toBe(200);
-    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: null, month: '2026-10', amount: 800 });
+    expect(deductions.addDeduction).toHaveBeenCalledWith(42, { kind_id: 4, subkind_id: null, month: '2026-10', amount: 800, ...NO_VIOLATION });
   });
 
   it('добавить: уволенному после месяца увольнения или без даты — 400, не «штат зарплаты» — 403, подвид чужого вида — 409', async () => {
@@ -307,7 +315,7 @@ describe('«Удержания»: те же записи, что во вклад
     const res = makeRes();
     await deductionsC.update(makeReq({ params: { id: '7' }, body: patch }), res);
     expect(res.body.data).toEqual(after);
-    expect(deductions.updateDeduction).toHaveBeenCalledWith(7, patch);
+    expect(deductions.updateDeduction).toHaveBeenCalledWith(7, { ...patch, ...NO_VIOLATION });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_UPDATED',
       expect.objectContaining({

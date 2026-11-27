@@ -28,6 +28,7 @@ const PAYROLL_DEDUCTIONS_API: IDeductionRegistryApi<IDeductionRegistryRow> = {
     searchEmployees: payrollRegistryService.searchEmployees,
     add: payrollRegistryService.addDeduction,
     update: payrollRegistryService.updateDeduction,
+    objects: { key: ['deduction-violation-objects', 'payroll'], list: payrollRegistryService.listDeductionObjects },
   },
   planned: plannedDeductions,
   plannedEditor: {

@@ -101,7 +101,7 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
         payroll_paid_amounts, payroll_planned_supplements, payroll_settings, payroll_item_types,
         payroll_rate_values, payroll_rates, payroll_compensation_terms, staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
         payroll_deduction_kinds, employee_schedule_assignments, work_schedules, positions,
-        user_profiles, employees, org_departments CASCADE;
+        user_profiles, employees, org_departments, skud_objects CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
@@ -165,6 +165,9 @@ describe.skipIf(!PG_URL)('виды удержаний на PostgreSQL', () => {
       employee_id integer NOT NULL, kind_id integer NOT NULL REFERENCES payroll_deduction_kinds(id) ON DELETE RESTRICT)`);
     await pg.pool!.query(migration('321_payroll_deduction_subkinds.sql'));
     await pg.pool!.query(migration('357_payroll_planned_deductions.sql'));
+    // 383: признак вида «место и дата нарушения» — его читает дерево видов; объект — из справочника объектов СКУД.
+    await pg.pool!.query(`CREATE TABLE skud_objects (id uuid PRIMARY KEY, name text NOT NULL, is_active boolean NOT NULL DEFAULT true)`);
+    await pg.pool!.query(migration('383_staff_deduction_violation_place.sql'));
   });
 
   const listKinds = async () => (await listDeductionKindTree()).map(({ id, name }) => ({ id, name }));

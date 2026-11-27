@@ -86,7 +86,10 @@ describe('окно планового удержания', () => {
     expect(withKeptKind(kinds)).toBe(kinds);
     expect(withKeptKind(kinds, { kind_id: 9, kind_name: 'Займ', subkind_id: 4, subkind_name: 'Старый' })).toEqual([
       ...kinds,
-      { id: 9, name: 'Займ', default_amount: null, subkinds: [{ id: 4, kind_id: 9, name: 'Старый', default_amount: null }] },
+      {
+        id: 9, name: 'Займ', default_amount: null, requires_place_date: false,
+        subkinds: [{ id: 4, kind_id: 9, name: 'Старый', default_amount: null }],
+      },
     ]);
   });
 });

@@ -57,9 +57,11 @@ export const renameDeductionKind = async (
 export interface IDeductionKindWithDefault extends IPayrollDeductionKind {
   /** NUMERIC как строка: «5000.00»; не задана — null. */
   default_amount: string | null;
+  /** У удержания вида обязательны место и дата нарушения (миграция 383); только SQL. */
+  requires_place_date: boolean;
 }
 
-const KIND_WITH_DEFAULT_COLUMNS = `id, name, default_amount::text AS default_amount`;
+const KIND_WITH_DEFAULT_COLUMNS = `id, name, default_amount::text AS default_amount, requires_place_date`;
 
 /** Добавить вид с суммой по умолчанию. Такой уже есть — null. */
 export const addDeductionKindWithDefault = async (
@@ -93,14 +95,16 @@ export const updateDeductionKind = async (
           SET name = $2, default_amount = $3
          FROM (SELECT id, name, default_amount FROM payroll_deduction_kinds WHERE id = $1 FOR UPDATE) prev
         WHERE k.id = prev.id
-        RETURNING k.id, k.name, k.default_amount::text AS default_amount,
+        RETURNING k.id, k.name, k.default_amount::text AS default_amount, k.requires_place_date,
                   prev.name AS previous_name, prev.default_amount::text AS previous_amount`,
       [id, name, defaultAmount],
     );
     if (!row) return null;
     return {
-      before: { id: row.id, name: row.previous_name, default_amount: row.previous_amount },
-      after: { id: row.id, name: row.name, default_amount: row.default_amount },
+      before: {
+        id: row.id, name: row.previous_name, default_amount: row.previous_amount, requires_place_date: row.requires_place_date,
+      },
+      after: { id: row.id, name: row.name, default_amount: row.default_amount, requires_place_date: row.requires_place_date },
     };
   } catch (err) {
     if (hasPgCode(err, PG_UNIQUE_VIOLATION)) return 'duplicate';

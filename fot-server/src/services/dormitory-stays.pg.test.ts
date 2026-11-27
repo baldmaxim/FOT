@@ -94,6 +94,7 @@ describe.skipIf(!PG_URL)('общежитие и ставка с кодом на 
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
         dismissal_date date,
+        hire_date date,
         country text
       );
       -- Отдел, из которого уволен (effectiveDepartmentSql): столбцы — как на проде.

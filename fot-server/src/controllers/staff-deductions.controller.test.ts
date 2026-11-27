@@ -38,9 +38,16 @@ vi.mock('../services/audit.service.js', () => ({ auditService: audit }));
 const grant = vi.hoisted(() => ({ getRequestStaffTabGrant: vi.fn() }));
 vi.mock('../services/staff-tab-access.service.js', () => grant);
 
+// Зарплата месяца из 1С (миграция 383: месяц, загруженный из 1С, удержанию не выбрать) — по умолчанию не загружена.
+const paid = vi.hoisted(() => ({ getPaidAmounts: vi.fn() }));
+vi.mock('../services/payroll/payroll-paid.service.js', () => paid);
+
 import { staffDeductionsController as c } from './staff-deductions.controller.js';
 import { dismissedSearchFrom } from './staff-deduction-input.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+
+/** Поля нарушения (миграция 383), которых старый клиент не шлёт. */
+const NO_VIOLATION = { violation_object_id: null, violation_place: null, violation_date: null };
 
 const makeRes = () => {
   const res = {
@@ -78,6 +85,7 @@ const SEARCH_OPTIONS = { dismissedFrom: dismissedSearchFrom(moscowTodayIso()) };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  paid.getPaidAmounts.mockResolvedValue([]);
 });
 
 describe('список и поиск', () => {
@@ -121,7 +129,7 @@ describe('добавление', () => {
     await c.add(makeReq({ body }), res);
 
     expect(res.statusCode).toBe(200);
-    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000 });
+    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000, ...NO_VIOLATION });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_ADDED',
       expect.objectContaining({
@@ -189,7 +197,7 @@ describe('добавление', () => {
     const october = makeRes();
     await c.add(makeReq({ body }), october);
     expect(october.statusCode).toBe(200);
-    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000 });
+    expect(svc.addDeduction).toHaveBeenCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000, ...NO_VIOLATION });
 
     const november = makeRes();
     await c.add(makeReq({ body: { ...body, month: '2026-11' } }), november);
@@ -213,8 +221,55 @@ describe('добавление', () => {
       expect(res.statusCode).toBe(409);
       expect(res.body.code).toBe(code);
     }
-    expect(svc.addDeduction).toHaveBeenLastCalledWith(42, { kind_id: 3, subkind_id: 4, month: '2026-10', amount: 5000 });
+    expect(svc.addDeduction).toHaveBeenLastCalledWith(42, { kind_id: 3, subkind_id: 4, month: '2026-10', amount: 5000, ...NO_VIOLATION });
     expect(audit.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('место и дата нарушения (миграция 383): доходят до сервиса; без них — 400; объект удалён — 409', async () => {
+    employees.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWriteEmployeeInScope.mockResolvedValue(true);
+    const violation = {
+      violation_object_id: '0b8e6c1e-4f53-4f0b-9a3c-2a1f7b9d8e10', violation_place: 'корпус 2', violation_date: '2026-10-20',
+    };
+    svc.addDeduction.mockResolvedValueOnce({ ...DEDUCTION, ...violation, violation_object_name: 'ЖК Сад 69' });
+    const added = makeRes();
+    await c.add(makeReq({ body: { ...body, ...violation } }), added);
+    expect(added.statusCode).toBe(200);
+    expect(svc.addDeduction).toHaveBeenLastCalledWith(42, { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000, ...violation });
+    expect(audit.logFromRequest).toHaveBeenLastCalledWith(
+      expect.anything(), 'user-1', 'STAFF_DEDUCTION_ADDED',
+      expect.objectContaining({ details: expect.objectContaining({ ...violation, violation_object_name: 'ЖК Сад 69' }) }),
+    );
+
+    svc.addDeduction.mockResolvedValueOnce('place_required');
+    const noPlace = makeRes();
+    await c.add(makeReq({ body }), noPlace);
+    expect(noPlace.statusCode).toBe(400);
+    expect(noPlace.body).toMatchObject({ error: 'Укажите место и дату нарушения', code: 'PLACE_REQUIRED' });
+
+    svc.addDeduction.mockResolvedValueOnce('object_missing');
+    const noObject = makeRes();
+    await c.add(makeReq({ body: { ...body, ...violation } }), noObject);
+    expect(noObject.statusCode).toBe(409);
+    expect(noObject.body.code).toBe('OBJECT_MISSING');
+    expect(audit.logFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('месяц, зарплата за который загружена из 1С, — 400 без записи; до приёма — 400 без записи', async () => {
+    employees.getEmployeeState.mockResolvedValue(ACTIVE);
+    scope.canWriteEmployeeInScope.mockResolvedValue(true);
+    paid.getPaidAmounts.mockResolvedValueOnce([{ month: '2026-10', item: 'contract', amount: '60000.00' }]);
+    const loaded = makeRes();
+    await c.add(makeReq({ body }), loaded);
+    expect(loaded.statusCode).toBe(400);
+    expect(loaded.body.error).toBe('Зарплата за октябрь 2026 уже загружена из 1С — укажите текущий или следующий месяц');
+
+    employees.getEmployeeState.mockResolvedValue({ ...ACTIVE, hire_date: '2026-11-05' });
+    const beforeHire = makeRes();
+    await c.add(makeReq({ body }), beforeHire);
+    expect(beforeHire.statusCode).toBe(400);
+    expect(beforeHire.body.error).toBe('Принят 05.11.2026 — удержание не раньше ноября 2026');
+    expect(svc.addDeduction).not.toHaveBeenCalled();
   });
 });
 
@@ -230,7 +285,7 @@ describe('правка', () => {
     await c.update(makeReq({ params: { id: '7' }, body }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toEqual(after);
-    expect(svc.updateDeduction).toHaveBeenCalledWith(7, body);
+    expect(svc.updateDeduction).toHaveBeenCalledWith(7, { ...body, ...NO_VIOLATION });
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_UPDATED',
       expect.objectContaining({
@@ -246,7 +301,7 @@ describe('правка', () => {
     const withSubkind = { ...after, subkind_id: 4, subkind_name: 'Курение' };
     svc.updateDeduction.mockResolvedValueOnce({ before: after, after: withSubkind });
     await c.update(makeReq({ params: { id: '7' }, body: { ...body, subkind_id: 4 } }), makeRes());
-    expect(svc.updateDeduction).toHaveBeenLastCalledWith(7, { ...body, subkind_id: 4 });
+    expect(svc.updateDeduction).toHaveBeenLastCalledWith(7, { ...body, subkind_id: 4, ...NO_VIOLATION });
     expect(audit.logFromRequest).toHaveBeenCalledTimes(2);
     expect(audit.logFromRequest).toHaveBeenLastCalledWith(
       expect.anything(), 'user-1', 'STAFF_DEDUCTION_UPDATED',

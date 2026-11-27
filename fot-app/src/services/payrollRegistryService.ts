@@ -1,7 +1,12 @@
 import { apiClient } from '../api/client';
 import type { ITableExportSnapshot } from '../utils/tableView';
 import { payrollService } from './payrollService';
-import { plannedDeductionApi, type IStaffDeduction, type IStaffDeductionPayload } from './staffDeductionService';
+import {
+  plannedDeductionApi,
+  type IDeductionViolationObject,
+  type IStaffDeduction,
+  type IStaffDeductionPayload,
+} from './staffDeductionService';
 
 /**
  * Таблицы окна «Справочник» на «Расчётах» (миграции 315, 317): «Доплата» (со списками «Плановые доплаты» и
@@ -404,6 +409,10 @@ export const payrollRegistryService = {
   removeDeduction: async (id: number): Promise<void> => {
     await apiClient.delete(`/payroll/staff-deductions/${id}`);
   },
+
+  /** Объекты для «Места» нарушения (миграция 383) — тот же список, что у кадров. */
+  listDeductionObjects: (signal?: AbortSignal) =>
+    list<IDeductionViolationObject>('/payroll/staff-deductions/objects', signal),
 
   /** Плановые удержания (миграция 357) — те же записи, что у кадров. */
   plannedDeductions: plannedDeductionApi('/payroll/planned-deductions'),

@@ -150,7 +150,7 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         payroll_compensation_terms,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds,
         employee_schedule_assignments, work_schedules, positions, employee_dismissal_events,
-        user_profiles, employees, org_departments CASCADE;
+        user_profiles, employees, org_departments, skud_objects CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid, kind text);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
@@ -162,8 +162,11 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
         position_id uuid REFERENCES positions(id),
         employment_status text NOT NULL DEFAULT 'active',
         is_archived boolean NOT NULL DEFAULT false,
-        dismissal_date date
+        dismissal_date date,
+        hire_date date
       );
+      -- 383: место нарушения — объект из справочника объектов СКУД.
+      CREATE TABLE skud_objects (id uuid PRIMARY KEY, name text NOT NULL, is_active boolean NOT NULL DEFAULT true);
       -- Отдел, из которого уволен (проверка подрядчика у уволенного, effectiveDepartmentSql): столбцы — как на проде.
       CREATE TABLE employee_dismissal_events (
         id serial PRIMARY KEY, employee_id integer NOT NULL, from_department_id uuid, dismissal_date date,
@@ -233,6 +236,8 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       '337_payroll_planned_supplement_rewrite.sql', '364_payroll_planned_supplement_comment.sql',
       // 369 — несколько доплат на одни даты; дважды — повторный запуск безопасен.
       '369_payroll_planned_supplements_concurrent.sql', '369_payroll_planned_supplements_concurrent.sql',
+      // 383 — место и дата нарушения у удержания: сервис удержаний читает их колонки.
+      '383_staff_deduction_violation_place.sql',
     ]) {
       await run(migration(name));
     }

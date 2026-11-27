@@ -1215,6 +1215,16 @@ export const deleteTravelObject = async (objectId: string): Promise<void> => {
     );
   }
 
+  // Место нарушения в удержаниях (миграция 383, FK RESTRICT): понятный ответ вместо ошибки FK.
+  const deductionRefs = await queryOne<{ count: string }>(
+    'SELECT count(*)::text AS count FROM staff_deductions WHERE violation_object_id = $1',
+    [objectId],
+  );
+  if (Number(deductionRefs?.count ?? 0) > 0) {
+    const message = 'Объект указан местом нарушения в удержаниях — удаление запрещено, архивируйте его';
+    throw Object.assign(new Error(message), { __save: { http: 409, code: 'object_in_deductions', message } });
+  }
+
   // Порядок изменён: сначала строка БД, потом файл. Файл-сирота безобиден,
   // потерянная карта при упавшем DELETE — нет.
   try {

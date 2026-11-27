@@ -132,6 +132,8 @@ export interface IDormitoryEmployeeState {
   is_contractor: boolean;
   /** YYYY-MM-DD; нет — null. */
   dismissal_date: string | null;
+  /** YYYY-MM-DD; нет — null. Месяц удержания — не раньше месяца приёма (staff-deduction-input.ts). */
+  hire_date: string | null;
 }
 
 const STAY_SELECT = `
@@ -272,7 +274,8 @@ export const getEmployeeState = async (employeeId: number): Promise<IDormitoryEm
     `WITH ${payrollContractorDeptsCte('$2')}
      SELECT e.id, e.employment_status, (e.is_archived IS TRUE) AS is_archived,
             EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = ${effectiveDepartmentSql('e')}) AS is_contractor,
-            to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date
+            to_char(e.dismissal_date, 'YYYY-MM-DD') AS dismissal_date,
+            to_char(e.hire_date, 'YYYY-MM-DD') AS hire_date
        FROM employees e
       WHERE e.id = $1`,
     [employeeId, await getContractorRootId()],

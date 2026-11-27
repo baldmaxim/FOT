@@ -64,11 +64,37 @@ describe('«Удержания за месяц»: помесячные и пла
     expect(buildDeductionMonthRows([], undefined, () => true)).toBeUndefined();
   });
 
-  it('столбец «Тип» — сразу после «Вида удержания», в xlsx тоже', () => {
-    expect(DEDUCTION_MONTH_COLUMNS.map(column => column.key))
-      .toEqual(['full_name', 'department', 'position', 'kind_name', 'source', 'month', 'amount']);
+  it('столбец «Тип» — сразу после «Вида удержания», в xlsx тоже; за ним «Место» и «Дата нарушения» (383)', () => {
+    expect(DEDUCTION_MONTH_COLUMNS.map(column => column.key)).toEqual([
+      'full_name', 'department', 'position', 'kind_name', 'source', 'violation_place', 'violation_date', 'month', 'amount',
+    ]);
     const [row] = buildDeductionMonthRows([], [planned(1, 7, 'Каримов Акмал', '2026-11')], () => true)!;
     expect(DEDUCTION_MONTH_COLUMNS.find(column => column.key === 'source')!.text(row)).toBe('Плановое');
+  });
+
+  it('«Место» и «Дата нарушения» (383): объект с уточнением и дата у разового; у планового и без места — «—»', () => {
+    const fine: IStaffDeduction = {
+      ...staff(5, 7, 'Каримов Акмал', '2026-11'),
+      violation_object_id: '0b8e6c1e-4f53-4f0b-9a3c-2a1f7b9d8e10',
+      violation_object_name: 'ЖК Сад 69',
+      violation_place: 'корпус 2, 5 этаж',
+      violation_date: '2026-11-25',
+    };
+    const rows = buildDeductionMonthRows(
+      [fine, { ...fine, id: 6, violation_place: null }, staff(7, 7, 'Каримов Акмал', '2026-11')],
+      [planned(1, 7, 'Каримов Акмал', '2026-11')],
+      () => true,
+    )!;
+    const place = DEDUCTION_MONTH_COLUMNS.find(column => column.key === 'violation_place')!;
+    const date = DEDUCTION_MONTH_COLUMNS.find(column => column.key === 'violation_date')!;
+    expect(rows.map(row => [row.source, place.text(row), date.text(row)])).toEqual([
+      ['planned', '—', '—'],
+      ['staff', 'ЖК Сад 69, корпус 2, 5 этаж', '25.11.2026'],
+      ['staff', 'ЖК Сад 69', '25.11.2026'],
+      ['staff', '—', '—'],
+    ]);
+    // Сортировка даты — по ISO, пустое — в конце.
+    expect(rows.map(row => date.sortValue(row))).toEqual([null, '2026-11-25', '2026-11-25', null]);
   });
 });
 

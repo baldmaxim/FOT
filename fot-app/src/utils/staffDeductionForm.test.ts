@@ -1,15 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
 import type { IStaffDeductionKind } from '../services/staffDeductionService';
-import { amountAfterKindChange, deductionDefaultAmount, monthForDismissed, parseStaffDeduction } from './staffDeductionForm';
+import {
+  amountAfterKindChange,
+  deductionDefaultAmount,
+  kindRequiresPlaceDate,
+  monthForDismissed,
+  parseStaffDeduction,
+  type IViolationDraft,
+} from './staffDeductionForm';
 
-const draft = { selected: true, kindId: 3, subkindId: null, month: '2026-10', amount: '5 000,5' };
+/** Вид без признака «место и дата»: поля нарушения не нужны. */
+const NO_PLACE: IViolationDraft = {
+  requiresPlaceDate: false, objectId: null, place: '', date: '', legacyEmptyAllowed: false, todayIso: '2026-11-27',
+};
+const NO_VIOLATION = { violation_object_id: null, violation_place: null, violation_date: null };
+
+const draft = { selected: true, kindId: 3, subkindId: null, month: '2026-10', amount: '5 000,5', violation: NO_PLACE };
 
 describe('parseStaffDeduction', () => {
   it('сумма с пробелами и запятой → число, месяц и вид как есть; без подвида — null', () => {
     expect(parseStaffDeduction(draft)).toEqual({
       ok: true,
-      payload: { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000.5 },
+      payload: { kind_id: 3, subkind_id: null, month: '2026-10', amount: 5000.5, ...NO_VIOLATION },
     });
   });
 
@@ -25,6 +38,54 @@ describe('parseStaffDeduction', () => {
     for (const amount of ['', '0', '-5', '10,555', 'abc']) {
       expect(parseStaffDeduction({ ...draft, amount }), amount).toMatchObject({ ok: false, field: 'amount' });
     }
+  });
+});
+
+describe('parseStaffDeduction: место и дата нарушения (миграция 383)', () => {
+  const OBJECT_ID = '0b8e6c1e-4f53-4f0b-9a3c-2a1f7b9d8e10';
+  const tb = (over: Partial<IViolationDraft> = {}) => ({
+    ...draft,
+    violation: { ...NO_PLACE, requiresPlaceDate: true, objectId: OBJECT_ID, place: '', date: '2026-11-25', ...over },
+  });
+
+  it('объект и дата — в запрос; уточнение — сжатыми пробелами, пустое — null', () => {
+    expect(parseStaffDeduction(tb({ place: '  корпус 2,   5 этаж ' }))).toMatchObject({
+      ok: true,
+      payload: { violation_object_id: OBJECT_ID, violation_place: 'корпус 2, 5 этаж', violation_date: '2026-11-25' },
+    });
+    expect(parseStaffDeduction(tb())).toMatchObject({ ok: true, payload: { violation_place: null } });
+  });
+
+  it('у вида без признака введённое не уходит', () => {
+    const typed = { ...NO_PLACE, objectId: OBJECT_ID, place: 'корпус 2', date: '2026-11-25' };
+    expect(parseStaffDeduction({ ...draft, violation: typed })).toMatchObject({ ok: true, payload: NO_VIOLATION });
+  });
+
+  it('нет объекта — «Выберите место», нет даты — «Укажите дату», дата позже сегодня — нельзя', () => {
+    expect(parseStaffDeduction(tb({ objectId: null }))).toEqual({ ok: false, field: 'object', message: 'Выберите место нарушения' });
+    expect(parseStaffDeduction(tb({ date: '' }))).toEqual({ ok: false, field: 'date', message: 'Укажите дату нарушения' });
+    expect(parseStaffDeduction(tb({ date: '2026-11-27' }))).toMatchObject({ ok: true });
+    expect(parseStaffDeduction(tb({ date: '2026-11-28' }))).toEqual({
+      ok: false, field: 'date', message: 'Дата нарушения не может быть позже сегодняшней',
+    });
+    expect(parseStaffDeduction(tb({ place: 'я'.repeat(201) }))).toMatchObject({ ok: false, field: 'place' });
+  });
+
+  it('прежняя строка без места: пустая — сохраняется; начали заполнять — нужно всё', () => {
+    const legacy = { objectId: null, place: '', date: '', legacyEmptyAllowed: true };
+    expect(parseStaffDeduction(tb(legacy))).toMatchObject({ ok: true, payload: NO_VIOLATION });
+    expect(parseStaffDeduction(tb({ ...legacy, date: '2026-09-10' }))).toMatchObject({ ok: false, field: 'object' });
+    expect(parseStaffDeduction(tb({ ...legacy, place: 'корпус 2' }))).toMatchObject({ ok: false, field: 'object' });
+  });
+
+  it('признак вида: есть — true; нет или вида нет — false', () => {
+    const kinds: IStaffDeductionKind[] = [
+      { id: 7, name: 'Нарушение техники безопасности', default_amount: null, requires_place_date: true, subkinds: [] },
+      { id: 3, name: 'Штрафы', default_amount: null, subkinds: [] },
+    ];
+    expect(kindRequiresPlaceDate(kinds, 7)).toBe(true);
+    expect(kindRequiresPlaceDate(kinds, 3)).toBe(false);
+    expect(kindRequiresPlaceDate(kinds, null)).toBe(false);
   });
 });
 

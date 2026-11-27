@@ -28,6 +28,8 @@ router.post('/kinds/:id/subkinds', deductionKindsEdit, subkinds.add);
 router.patch('/subkinds/:id', deductionKindsEdit, subkinds.update);
 router.delete('/subkinds/:id', deductionKindsEdit, subkinds.remove);
 router.get('/employees/search', deductionsEdit, c.searchEmployees);
+// «Место» нарушения (миграция 383): объекты для окна удержания.
+router.get('/objects', deductionsView, c.violationObjects);
 // «Плановые удержания» (миграция 357) — те же записи, что у «Зарплаты»; by-month — развёртка по месяцам, как в расчёте.
 router.get('/planned', deductionsView, c.plannedList);
 router.get('/planned/by-month', deductionsView, c.plannedListByMonth);

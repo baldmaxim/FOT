@@ -11,13 +11,55 @@ import { shiftMonth } from './moscowDate';
 import { rateAmountInputValue } from './payrollDictionary';
 import { parsePositiveAmount } from './payrollRegistryForms';
 
-export type StaffDeductionField = 'employee' | 'kind' | 'month' | 'amount';
+export type StaffDeductionField = 'employee' | 'kind' | 'object' | 'place' | 'date' | 'month' | 'amount';
 
 export type StaffDeductionParse =
   | { ok: true; payload: IStaffDeductionPayload }
   | { ok: false; field: StaffDeductionField; message: string };
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Уточнение места — не длиннее (как на сервере, миграция 383). */
+export const VIOLATION_PLACE_MAX = 200;
+
+/** Место и дата нарушения в окне (миграция 383): объект, уточнение, дата YYYY-MM-DD или ''. */
+export interface IViolationDraft {
+  /** У выбранного вида обязательны место и дата. */
+  requiresPlaceDate: boolean;
+  objectId: string | null;
+  place: string;
+  date: string;
+  /**
+   * Правка строки того же вида, у которой места и даты не было (прежние строки, загрузки 1С): пустые поля допустимы,
+   * начатое заполнение — нет (как на сервере, staff-deduction-violation.ts).
+   */
+  legacyEmptyAllowed: boolean;
+  /** Сегодня по МСК, YYYY-MM-DD: дата нарушения не позже. */
+  todayIso: string;
+}
+
+type ViolationPayload = Pick<IStaffDeductionPayload, 'violation_object_id' | 'violation_place' | 'violation_date'>;
+
+const NO_VIOLATION: ViolationPayload = { violation_object_id: null, violation_place: null, violation_date: null };
+
+/** Поля нарушения для запроса; у вида без признака — пусто. */
+const parseViolation = (
+  draft: IViolationDraft,
+): { ok: true; value: ViolationPayload } | { ok: false; field: StaffDeductionField; message: string } => {
+  if (!draft.requiresPlaceDate) return { ok: true, value: NO_VIOLATION };
+  const place = draft.place.replace(/\s+/g, ' ').trim();
+  const date = draft.date.trim();
+  if (place.length > VIOLATION_PLACE_MAX) {
+    return { ok: false, field: 'place', message: `Уточнение места — не длиннее ${VIOLATION_PLACE_MAX} символов` };
+  }
+  if (date && !DATE_PATTERN.test(date)) return { ok: false, field: 'date', message: 'Укажите дату нарушения' };
+  if (date > draft.todayIso) return { ok: false, field: 'date', message: 'Дата нарушения не может быть позже сегодняшней' };
+  if (draft.legacyEmptyAllowed && draft.objectId === null && !place && !date) return { ok: true, value: NO_VIOLATION };
+  if (draft.objectId === null) return { ok: false, field: 'object', message: 'Выберите место нарушения' };
+  if (!date) return { ok: false, field: 'date', message: 'Укажите дату нарушения' };
+  return { ok: true, value: { violation_object_id: draft.objectId, violation_place: place || null, violation_date: date } };
+};
 
 export const parseStaffDeduction = (draft: {
   /** Сотрудник выбран (при правке — всегда). */
@@ -27,17 +69,27 @@ export const parseStaffDeduction = (draft: {
   subkindId: number | null;
   month: string;
   amount: string;
+  violation: IViolationDraft;
 }): StaffDeductionParse => {
   if (!draft.selected) return { ok: false, field: 'employee', message: 'Выберите сотрудника' };
   if (draft.kindId === null) return { ok: false, field: 'kind', message: 'Выберите вид удержания' };
+  const violation = parseViolation(draft.violation);
+  if (!violation.ok) return violation;
   if (!MONTH_PATTERN.test(draft.month)) return { ok: false, field: 'month', message: 'Укажите месяц' };
   const amount = parsePositiveAmount(draft.amount);
   if ('error' in amount) return { ok: false, field: 'amount', message: amount.error };
   return {
     ok: true,
-    payload: { kind_id: draft.kindId, subkind_id: draft.subkindId, month: draft.month, amount: amount.amount },
+    payload: {
+      kind_id: draft.kindId, subkind_id: draft.subkindId, month: draft.month, amount: amount.amount, ...violation.value,
+    },
   };
 };
+
+/** Признак «место и дата нарушения» у вида; вида нет — false. */
+export const kindRequiresPlaceDate = (kinds: readonly IStaffDeductionKind[], kindId: number | null): boolean => (
+  kinds.find(kind => kind.id === kindId)?.requires_place_date === true
+);
 
 /**
  * Сумма по умолчанию для выбранных вида и подвида (миграция 321): у подвида своя — она; нет — сумма вида.
@@ -88,7 +140,7 @@ export const withKeptKind = (
 ): readonly IStaffDeductionKind[] => {
   if (!kept) return kinds;
   const kind = kinds.find(entry => entry.id === kept.kind_id)
-    ?? { id: kept.kind_id, name: kept.kind_name, default_amount: null, subkinds: [] };
+    ?? { id: kept.kind_id, name: kept.kind_name, default_amount: null, requires_place_date: false, subkinds: [] };
   const subkinds = kept.subkind_id === null || kept.subkind_name === null
     || kind.subkinds.some(subkind => subkind.id === kept.subkind_id)
     ? kind.subkinds

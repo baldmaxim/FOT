@@ -159,6 +159,8 @@ router.patch('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowa
 router.delete('/dormitory-allowances/:id', deductionsEdit, payrollDormitoryAllowancesController.remove);
 // «Удержания» — удержания staff_deductions (миграция 321): те же записи, что во вкладке кадров «Удержания».
 router.get('/staff-deductions', deductionsView, payrollStaffDeductionsController.list);
+// «Место» нарушения (миграция 383): объекты для окна удержания.
+router.get('/staff-deductions/objects', deductionsView, payrollStaffDeductionsController.violationObjects);
 router.post('/staff-deductions', termsEdit, payrollStaffDeductionsController.add);
 router.patch('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.update);
 router.delete('/staff-deductions/:id', termsEdit, payrollStaffDeductionsController.remove);

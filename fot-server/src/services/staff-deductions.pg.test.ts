@@ -49,6 +49,7 @@ import {
   getDeduction,
   listDeductions,
   listPayrollDeductions,
+  listViolationObjects,
   updateDeduction,
 } from './staff-deductions.service.js';
 import {
@@ -68,6 +69,12 @@ const migration = (name: string): string => readFileSync(`${MIGRATIONS_DIR}${nam
 const run = (sql: string) => pg.pool!.query(sql);
 
 const D1 = '00000000-0000-0000-0000-0000000000d1';
+const SAD69 = '00000000-0000-0000-0000-0000000000e1';
+const WAVE = '00000000-0000-0000-0000-0000000000e2';
+const OLD_OBJECT = '00000000-0000-0000-0000-0000000000e3';
+const TB_KIND = 'Нарушение техники безопасности';
+/** Поля нарушения пустые (миграция 383). */
+const NO_VIOLATION = { violation_object_id: null, violation_object_name: null, violation_place: null, violation_date: null };
 const CONTRACTORS = '00000000-0000-0000-0000-0000000000c0';
 
 describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', () => {
@@ -79,10 +86,16 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
       DROP TABLE IF EXISTS payroll_planned_deduction_changes, payroll_planned_deductions,
         staff_deductions, payroll_employee_deductions, payroll_deduction_subkinds,
         payroll_deduction_kinds, payroll_compensation_terms, employee_dormitory_stays, role_page_access, access_pages,
-        user_profiles, employees, positions, org_departments CASCADE;
+        user_profiles, employees, positions, org_departments, skud_objects CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
+      -- 383: объект — место нарушения (справочник объектов СКУД).
+      CREATE TABLE skud_objects (id uuid PRIMARY KEY, name text NOT NULL, is_active boolean NOT NULL DEFAULT true);
+      INSERT INTO skud_objects (id, name, is_active) VALUES
+        ('${SAD69}', 'ЖК Сад 69', true),
+        ('${WAVE}', 'ЖК Wave', true),
+        ('${OLD_OBJECT}', 'Объект в архиве', false);
       CREATE TABLE employees (
         id integer PRIMARY KEY,
         full_name text,
@@ -174,6 +187,10 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
     await run(migration('321_payroll_deduction_subkinds.sql'));
     // Плановые удержания тоже держат вид и подвид (счёт «назначен N сотрудникам»).
     await run(migration('357_payroll_planned_deductions.sql'));
+    // 383: место и дата нарушения — сервис читает их колонки; вид ТБ на проде есть, здесь заводим до миграции.
+    await run(`INSERT INTO payroll_deduction_kinds (name, sort_order) VALUES ('${TB_KIND}', 1000)`);
+    await run(migration('383_staff_deduction_violation_place.sql'));
+    await run(migration('383_staff_deduction_violation_place.sql'));
     expect((await run(`SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'staff_deductions_subkind_fk'`)).rows[0].n)
       .toBe(1);
     expect((await run(`SELECT indexname FROM pg_indexes WHERE tablename = 'payroll_deduction_subkinds' ORDER BY 1`)).rows)
@@ -186,18 +203,20 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
 
   it('виды: сумма по умолчанию — у новых и прежних, правка, 0 не принимается', async () => {
     expect((await listDeductionKindTree()).slice(0, 2)).toEqual([
-      { id: expect.any(Number), name: 'Корректировка удержаний', default_amount: null, subkinds: [] },
-      { id: expect.any(Number), name: 'ТМЦ', default_amount: null, subkinds: [] },
+      { id: expect.any(Number), name: 'Корректировка удержаний', default_amount: null, requires_place_date: false, subkinds: [] },
+      { id: expect.any(Number), name: 'ТМЦ', default_amount: null, requires_place_date: false, subkinds: [] },
     ]);
     const added = await addDeductionKindWithDefault('Штраф за опоздание', 1500.5);
-    expect(added).toEqual({ id: expect.any(Number), name: 'Штраф за опоздание', default_amount: '1500.50' });
+    expect(added).toEqual({
+      id: expect.any(Number), name: 'Штраф за опоздание', default_amount: '1500.50', requires_place_date: false,
+    });
     expect(await addDeductionKindWithDefault(' штраф за ОПОЗДАНИЕ', null)).toBeNull();
     expect((await listDeductionKindTree()).at(-1)).toEqual({ ...added, subkinds: [] });
 
     const garbage = await kindId('Штраф за мусор');
     expect(await updateDeductionKind(garbage, 'Штраф за мусор', 5000)).toEqual({
-      before: { id: garbage, name: 'Штраф за мусор', default_amount: null },
-      after: { id: garbage, name: 'Штраф за мусор', default_amount: '5000.00' },
+      before: { id: garbage, name: 'Штраф за мусор', default_amount: null, requires_place_date: false },
+      after: { id: garbage, name: 'Штраф за мусор', default_amount: '5000.00', requires_place_date: false },
     });
     expect(await updateDeductionKind(garbage, 'ТМЦ', 5000)).toBe('duplicate');
     expect(await updateDeductionKind(9999, 'Нет такого', null)).toBeNull();
@@ -246,7 +265,7 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
     expect(first).toEqual({
       id: expect.any(Number), employee_id: 1, full_name: 'Каримов Акмал', department: 'бр.Менгбоев Г.И.',
       position: 'Монтажник', kind_id: garbage, kind_name: 'Штраф за мусор', subkind_id: null, subkind_name: null,
-      month: '2026-10', amount: '5000.00',
+      month: '2026-10', amount: '5000.00', ...NO_VIOLATION,
     });
     const again = await addDeduction(1, { kind_id: garbage, subkind_id: null, month: '2026-10', amount: 2500 });
     expect(again).toMatchObject({ month: '2026-10', amount: '2500.00' });
@@ -349,6 +368,70 @@ describe.skipIf(!PG_URL)('«Удержания» кадров на PostgreSQL', 
     expect(people(await listPayrollDeductions({ ...scope, departmentIds: [D1], period: { monthStarts: ['2026-10-01'] } })))
       .toEqual(['Борисов Антон 2026-10', 'Каримов Акмал 2026-10']);
     await run(`DELETE FROM staff_deductions WHERE employee_id IN (3, 4, 5)`);
+  });
+
+  it('383: место и дата нарушения — у вида ТБ обязательны, прежние строки правятся пустыми, объект не удалить', async () => {
+    const tb = await kindId(TB_KIND);
+    const meals = await kindId('Питание');
+    // Строки этого теста — после lastId: в конце удаляются, следующий тест считает назначенные виды.
+    const lastId = (await run(`SELECT COALESCE(max(id), 0) AS id FROM staff_deductions`)).rows[0].id as number;
+    const tree = await listDeductionKindTree();
+    expect(tree.find(kind => kind.id === tb)!.requires_place_date).toBe(true);
+    expect(tree.filter(kind => kind.requires_place_date).map(kind => kind.name)).toEqual([TB_KIND]);
+    // Объекты для «Места» — только действующие, по названию.
+    expect(await listViolationObjects()).toEqual([{ id: WAVE, name: 'ЖК Wave' }, { id: SAD69, name: 'ЖК Сад 69' }]);
+
+    const place = { violation_object_id: SAD69, violation_place: 'корпус 2, 5 этаж', violation_date: '2026-11-25' };
+    // Без объекта или даты — отказ, строка не пишется.
+    const before = (await listDeductions({ employeeIds: [2] })).length;
+    expect(await addDeduction(2, { kind_id: tb, subkind_id: null, month: '2026-11', amount: 5000, ...NO_VIOLATION }))
+      .toBe('place_required');
+    expect(await addDeduction(2, {
+      kind_id: tb, subkind_id: null, month: '2026-11', amount: 5000, ...place, violation_date: null,
+    })).toBe('place_required');
+    expect((await listDeductions({ employeeIds: [2] })).length).toBe(before);
+
+    const fine = await addDeduction(2, { kind_id: tb, subkind_id: null, month: '2026-11', amount: 5000, ...place });
+    expect(fine).toMatchObject({ kind_name: TB_KIND, amount: '5000.00', ...place, violation_object_name: 'ЖК Сад 69' });
+    if (typeof fine === 'string') throw new Error('не добавлено');
+    // Уточнение необязательно; несуществующий объект — object_missing.
+    expect(await addDeduction(2, {
+      kind_id: tb, subkind_id: null, month: '2026-11', amount: 1000, ...place, violation_place: null,
+    })).toMatchObject({ violation_place: null, violation_object_name: 'ЖК Сад 69' });
+    expect(await addDeduction(2, {
+      kind_id: tb, subkind_id: null, month: '2026-11', amount: 1000, ...place, violation_object_id: '00000000-0000-0000-0000-0000000000ff',
+    })).toBe('object_missing');
+
+    // Место нельзя стереть; другой объект — можно; смена вида на вид без признака — поля очищаются.
+    expect(await updateDeduction(fine.id, { kind_id: tb, subkind_id: null, month: '2026-11', amount: 5000, ...NO_VIOLATION }))
+      .toBe('place_required');
+    expect(await updateDeduction(fine.id, {
+      kind_id: tb, subkind_id: null, month: '2026-11', amount: 5000, ...place, violation_object_id: WAVE,
+    })).toMatchObject({ before: { violation_object_name: 'ЖК Сад 69' }, after: { violation_object_name: 'ЖК Wave' } });
+    expect(await updateDeduction(fine.id, { kind_id: meals, subkind_id: null, month: '2026-11', amount: 5000, ...place }))
+      .toMatchObject({ after: { kind_name: 'Питание', ...NO_VIOLATION } });
+
+    // Прежняя строка вида ТБ без места (загрузка 1С) — правится, не заполняя; начали заполнять — нужно всё.
+    const legacy = (await run(
+      `INSERT INTO staff_deductions (employee_id, kind_id, month, amount) VALUES (2, ${tb}, '2026-09-01', 3000) RETURNING id`,
+    )).rows[0].id as number;
+    expect(await updateDeduction(legacy, { kind_id: tb, subkind_id: null, month: '2026-09', amount: 3500, ...NO_VIOLATION }))
+      .toMatchObject({ after: { amount: '3500.00', ...NO_VIOLATION } });
+    expect(await updateDeduction(legacy, {
+      kind_id: tb, subkind_id: null, month: '2026-09', amount: 3500, ...NO_VIOLATION, violation_date: '2026-09-10',
+    })).toBe('place_required');
+    // Строку другого вида перевести в ТБ без места нельзя.
+    const other = await addDeduction(2, { kind_id: meals, subkind_id: null, month: '2026-11', amount: 200 });
+    if (typeof other === 'string') throw new Error('не добавлено');
+    expect(await updateDeduction(other.id, { kind_id: tb, subkind_id: null, month: '2026-11', amount: 200, ...NO_VIOLATION }))
+      .toBe('place_required');
+
+    // Объект, указанный местом нарушения, удалить нельзя (RESTRICT); уточнение — до 200 символов.
+    await expect(run(`DELETE FROM skud_objects WHERE id = '${SAD69}'`)).rejects.toThrow(/staff_deductions_violation_object_fk/);
+    await expect(run(`UPDATE staff_deductions SET violation_place = repeat('я', 201) WHERE id = ${legacy}`))
+      .rejects.toThrow(/staff_deductions_violation_place_len/);
+
+    await run(`DELETE FROM staff_deductions WHERE id > ${lastId}`);
   });
 
   it('вид не удалить, пока он назначен удержаниям: число — разных сотрудников', async () => {

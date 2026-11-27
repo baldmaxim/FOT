@@ -85,6 +85,10 @@ export interface IDeductionMonthRow {
   /** YYYY-MM. */
   month: string;
   amount: string;
+  /** Место и дата нарушения (миграция 383) — у разового; у планового — null. */
+  violation_object_name: string | null;
+  violation_place: string | null;
+  violation_date: string | null;
   can_edit: boolean;
   staff?: IStaffDeduction;
   planned?: IPlannedDeductionMonth;
@@ -120,10 +124,15 @@ export const buildDeductionMonthRows = <Staff extends IStaffDeduction>(
   const rows: IDeductionMonthRow[] = [
     ...planned.map(row => ({
       ...common(row, row.month_amount), key: `planned:${row.id}:${row.month}`, source: 'planned' as const,
+      violation_object_name: null, violation_place: null, violation_date: null,
       can_edit: row.can_edit, planned: row,
     })),
     ...staff.map(row => ({
-      ...common(row, row.amount), key: `staff:${row.id}`, source: 'staff' as const, can_edit: canEditStaff(row),
+      ...common(row, row.amount), key: `staff:${row.id}`, source: 'staff' as const,
+      violation_object_name: row.violation_object_name ?? null,
+      violation_place: row.violation_place ?? null,
+      violation_date: row.violation_date ?? null,
+      can_edit: canEditStaff(row),
       staff: row,
     })),
   ];

@@ -29,7 +29,8 @@ import {
   withCanEdit,
 } from './payroll-dictionary.helpers.js';
 import {
-  STAFF_DEDUCTION_REF_MISSING,
+  listViolationObjectsHandler,
+  sendStaffDeductionWriteRefusal,
   staffDeductionAddRefusal,
   staffDeductionAddSchema,
   staffDeductionAuditDetails,
@@ -89,7 +90,7 @@ const add = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     }
     const deduction = await addDeduction(employeeId, input);
     if (typeof deduction === 'string') {
-      res.status(409).json(STAFF_DEDUCTION_REF_MISSING[deduction]);
+      sendStaffDeductionWriteRefusal(res, deduction);
       return;
     }
     await auditService.logFromRequest(req, req.user.id, 'STAFF_DEDUCTION_ADDED', {
@@ -122,7 +123,7 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
     if (typeof updated === 'string') {
-      res.status(409).json(STAFF_DEDUCTION_REF_MISSING[updated]);
+      sendStaffDeductionWriteRefusal(res, updated);
       return;
     }
     const { before, after } = updated;
@@ -163,4 +164,10 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-export const payrollStaffDeductionsController = { list, add, update, remove };
+export const payrollStaffDeductionsController = {
+  list,
+  add,
+  update,
+  remove,
+  violationObjects: listViolationObjectsHandler,
+};

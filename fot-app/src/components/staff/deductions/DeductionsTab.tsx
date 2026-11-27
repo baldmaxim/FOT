@@ -27,6 +27,7 @@ const STAFF_DEDUCTIONS_API: IDeductionRegistryApi<IStaffDeduction> = {
     searchEmployees: staffDeductionService.searchEmployees,
     add: staffDeductionService.add,
     update: staffDeductionService.update,
+    objects: { key: ['deduction-violation-objects', 'staff'], list: staffDeductionService.listObjects },
   },
   planned,
   plannedEditor: {

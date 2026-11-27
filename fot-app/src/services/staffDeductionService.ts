@@ -21,6 +21,13 @@ export interface IStaffDeduction {
   month: string;
   /** NUMERIC как строка: «5000.00». */
   amount: string;
+  /** Место нарушения (миграция 383): объект skud_objects; нет — null (старый сервер полей не присылает). */
+  violation_object_id?: string | null;
+  violation_object_name?: string | null;
+  /** Уточнение места. */
+  violation_place?: string | null;
+  /** Дата нарушения, YYYY-MM-DD. */
+  violation_date?: string | null;
 }
 
 export interface IStaffDeductionPayload {
@@ -30,6 +37,17 @@ export interface IStaffDeductionPayload {
   /** YYYY-MM. */
   month: string;
   amount: number;
+  /** Место и дата нарушения — только у вида с признаком requires_place_date, иначе null. */
+  violation_object_id: string | null;
+  violation_place: string | null;
+  /** YYYY-MM-DD. */
+  violation_date: string | null;
+}
+
+/** Объект для «Места» нарушения (skud_objects). */
+export interface IDeductionViolationObject {
+  id: string;
+  name: string;
 }
 
 /**
@@ -99,6 +117,8 @@ export interface IStaffDeductionKind {
   name: string;
   /** NUMERIC как строка; не задана — null. */
   default_amount: string | null;
+  /** У удержания вида обязательны место и дата нарушения (миграция 383); старый сервер не присылает. */
+  requires_place_date?: boolean;
   /** В порядке добавления. */
   subkinds: IDeductionSubkind[];
 }
@@ -177,6 +197,12 @@ export const staffDeductionService = {
       `/staff-deductions/employees/search?q=${encodeURIComponent(search)}`,
       { signal },
     );
+    return res.data;
+  },
+
+  /** Объекты для «Места» нарушения: действующие, по названию. */
+  listObjects: async (signal?: AbortSignal): Promise<IDeductionViolationObject[]> => {
+    const res = await apiClient.get<IApiResponse<IDeductionViolationObject[]>>('/staff-deductions/objects', { signal });
     return res.data;
   },
 

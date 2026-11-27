@@ -55,6 +55,8 @@ import {
   type IPlannedDeductionInput,
 } from './payroll-planned-deductions.service.js';
 import { loadSummaryExtras } from './payroll-summary-calc.service.js';
+import { deductionKindItem, mergeSummaryMonth } from './payroll-summary-calc.rules.js';
+import { addDeduction } from '../staff-deductions.service.js';
 import { monthDeductionsSql } from './payroll-month-deductions.sql.js';
 import { deleteDeductionKind } from './payroll-deduction-kinds.service.js';
 import { addSubkind, deleteSubkind } from './payroll-deduction-subkinds.service.js';
@@ -66,6 +68,7 @@ const run = (sql: string, params?: unknown[]) => pg.pool!.query(sql, params);
 const D1 = '00000000-0000-0000-0000-0000000000d1';
 const CONTRACTORS = '00000000-0000-0000-0000-0000000000c0';
 const AUTHOR = '00000000-0000-0000-0000-0000000000a9';
+const SAD69 = '00000000-0000-0000-0000-0000000000e1';
 
 /** Сотрудники: работающие, принятый в декабре, уволенный 14.11, подрядчик. */
 const WORKER = 1;
@@ -98,7 +101,7 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
         payroll_employee_deductions, payroll_deduction_subkinds, payroll_deduction_kinds, payroll_compensation_terms,
         employee_dormitory_stays, role_page_access, access_pages, user_profiles, payroll_one_time_supplements,
         employees, positions,
-        org_departments CASCADE;
+        org_departments, skud_objects CASCADE;
       DROP FUNCTION IF EXISTS public.get_descendant_department_ids(uuid[]);
       CREATE TABLE org_departments (id uuid PRIMARY KEY, name text, parent_id uuid);
       CREATE TABLE positions (id uuid PRIMARY KEY, name text);
@@ -113,6 +116,9 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
         dismissal_date date
       );
       CREATE TABLE user_profiles (id uuid PRIMARY KEY, full_name text);
+      -- 383: место нарушения удержания — объект СКУД.
+      CREATE TABLE skud_objects (id uuid PRIMARY KEY, name text NOT NULL, is_active boolean NOT NULL DEFAULT true);
+      INSERT INTO skud_objects (id, name) VALUES ('${SAD69}', 'ЖК Сад 69');
       -- loadSummaryExtras читает и разовые доплаты: столбцы — как на проде.
       CREATE TABLE payroll_one_time_supplements (
         id serial PRIMARY KEY, employee_id integer NOT NULL, month date NOT NULL, reason text NOT NULL,
@@ -153,6 +159,9 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
     ]) {
       await run(migration(name));
     }
+    // 383: вид ТБ на проде есть до миграции — она ставит ему признак «место и дата нарушения».
+    await run(`INSERT INTO payroll_deduction_kinds (name) VALUES ('Нарушение техники безопасности') ON CONFLICT DO NOTHING`);
+    await run(migration('383_staff_deduction_violation_place.sql'));
     await run(`INSERT INTO payroll_deduction_kinds (name) VALUES ('Займ') ON CONFLICT DO NOTHING`);
     loan = await kindId('Займ');
     meals = await kindId('Питание');
@@ -324,6 +333,32 @@ describe.skipIf(!PG_URL)('плановые удержания на PostgreSQL', 
       { employee_id: WORKER, kind_id: Math.min(loan, meals), amount: loan < meals ? '6250.25' : '1200.50' },
       { employee_id: WORKER, kind_id: Math.max(loan, meals), amount: loan < meals ? '1200.50' : '6250.25' },
     ]);
+  });
+
+  it('383: штраф ТБ с местом и датой из вкладки кадров — в расчёте ФОТ месяца и в статье «Нарушение ТБ» «Свода»', async () => {
+    const tb = await kindId('Нарушение техники безопасности');
+    const fine = await addDeduction(SECOND, {
+      kind_id: tb, subkind_id: null, month: '2027-03', amount: 5000.5,
+      violation_object_id: SAD69, violation_place: 'корпус 2, 5 этаж', violation_date: '2027-03-04',
+    });
+    expect(fine).toMatchObject({ amount: '5000.50', violation_object_name: 'ЖК Сад 69', violation_date: '2027-03-04' });
+
+    // Расчёт ФОТ за месяц (loadPayoutExtras: ARRAY[$2::date]) — сумма до копейки.
+    const calc = await run(
+      `SELECT SUM(amount)::text AS amount FROM (${monthDeductionsSql('ARRAY[$2::date]', '$1')}) d WHERE kind_id = $3`,
+      [[SECOND], '2027-03-01', tb],
+    );
+    expect(calc.rows[0].amount).toBe('5000.50');
+
+    // «Свод»: вид → статья safety_fine; сумма — в копейках, без потерь.
+    const extras = await loadSummaryExtras(['2027-03']);
+    const deductions = extras.deductions.get(`${SECOND}|2027-03`) ?? [];
+    expect(deductions).toContainEqual({ kind: 'Нарушение техники безопасности', amount: '5000.50' });
+    expect(deductionKindItem('Нарушение техники безопасности')).toBe('safety_fine');
+    const merged = mergeSummaryMonth({ paid: new Map(), calc: undefined, oneTime: [], deductions });
+    expect(merged.cents.get('safety_fine')).toBe(500050);
+
+    await run(`DELETE FROM staff_deductions WHERE kind_id = ${tb}`);
   });
 
   it('охват: «штат зарплаты» без уволенных и подрядчиков; кадры — свой список; окно сотрудника — и уволенный', async () => {

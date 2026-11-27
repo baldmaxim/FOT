@@ -29,7 +29,7 @@ const SUBKIND_COLUMNS = `id, kind_id, name, default_amount::text AS default_amou
 /** Виды в порядке справочника, у каждого — подвиды в порядке добавления. */
 export const listDeductionKindTree = async (): Promise<IDeductionKindTreeNode[]> =>
   query<IDeductionKindTreeNode>(
-    `SELECT k.id, k.name, k.default_amount::text AS default_amount,
+    `SELECT k.id, k.name, k.default_amount::text AS default_amount, k.requires_place_date,
             COALESCE((
               SELECT json_agg(json_build_object(
                        'id', s.id, 'kind_id', s.kind_id, 'name', s.name, 'default_amount', s.default_amount::text

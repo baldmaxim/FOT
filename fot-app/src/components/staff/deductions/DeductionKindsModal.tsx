@@ -95,7 +95,7 @@ export const DeductionKindsModal: FC<IDeductionKindsModalProps> = ({ canEdit, on
               })}
               onUpdate={(id, { name, amount }) => apply(async () => {
                 const updated = await staffDeductionService.updateKind(id, { name, default_amount: amount });
-                return list => list.map(kind => (kind.id === id ? { ...updated, subkinds: kind.subkinds } : kind));
+                return list => list.map(kind => (kind.id === id ? { ...kind, ...updated, subkinds: kind.subkinds } : kind));
               })}
               onDelete={id => apply(async () => {
                 await staffDeductionService.removeKind(id);
