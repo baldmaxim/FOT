@@ -59,12 +59,19 @@ export const printFile = (url: string, { pdf, rotation, title, onError }: IPrint
         return;
       }
     }
-    win.addEventListener('afterprint', cleanup, { once: true });
+    // Скан убираем после печати. PDF — нет: когда его кадр шлёт afterprint, не видно, а убранный раньше времени кадр
+    // не распечатается; его убирает закрытие просмотра или следующая печать.
+    if (!pdf) win.addEventListener('afterprint', cleanup, { once: true });
     // Фокус — обратно на страницу (кнопку «Печать»): иначе он остаётся в скрытом iframe и Escape не закрывает
     // просмотр, пока iframe не убран (у PDF — до закрытия просмотра).
     const previous = document.activeElement;
-    win.focus();
-    win.print();
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      cleanup();
+      onError();
+    }
     if (previous instanceof HTMLElement && previous !== document.body && previous.isConnected) {
       previous.focus({ preventScroll: true });
     }
