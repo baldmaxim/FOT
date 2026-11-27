@@ -80,9 +80,11 @@ import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { useTimesheetDepartmentAccess } from '../../hooks/useTimesheetDepartmentAccess';
 import { useStaffSectionDepartments } from '../../hooks/useStaffSectionDepartments';
 import { useTimesheetSalary } from '../../hooks/useTimesheetSalary';
+import { useTeamSalary } from '../../hooks/useTeamSalary';
 import { TimesheetSalaryObjects } from '../../components/timesheet/TimesheetSalaryObjects';
 import { TimesheetBrigadesTab } from '../../components/timesheet/TimesheetBrigadesTab';
 import type { ITimesheetSalaryGridProps } from '../../components/timesheet/TimesheetSalaryCells';
+import type { ITimesheetTeamSalaryGridProps } from '../../components/timesheet/TimesheetTeamSalaryCell';
 import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
 import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
@@ -505,6 +507,24 @@ export const TimesheetPage: FC = () => {
     timesheetSalary.pendingKtuEmployeeId,
     timesheetSalary.setKtu,
   ]);
+  // Столбец «Зарплата» руководителя (миграция 382): прошлый месяц своих людей, только «По отделу» / «По участкам»,
+  // вкладка «По сотрудникам», выбран отдел (не «Мои сотрудники»). Отдел вне охвата — сервер 403, столбца нет.
+  const teamSalaryState = useTeamSalary({
+    departmentId: isDirectReportsMarker ? null : activeGridDeptId,
+    enabled: profile?.has_team_salary_access === true
+      && (timesheetMode === 'department' || timesheetMode === 'assigned')
+      && viewMode === 'employees',
+  });
+  const teamSalaryGridProps = useMemo<ITimesheetTeamSalaryGridProps | undefined>(() => (
+    teamSalaryState.visible
+      ? {
+        data: teamSalaryState.data,
+        rows: teamSalaryState.rows,
+        loading: teamSalaryState.loading,
+        failed: teamSalaryState.failed,
+      }
+      : undefined
+  ), [teamSalaryState.visible, teamSalaryState.data, teamSalaryState.rows, teamSalaryState.loading, teamSalaryState.failed]);
   // Объектные детали нужны в обоих режимах: «по объектам» — для группировки строк,
   // «по сотрудникам» — для per-object корректировок в дневной модалке.
   const includeObjectDetails = true;
@@ -3076,6 +3096,7 @@ export const TimesheetPage: FC = () => {
             pendingEmployeeId={teamPendingEmployeeId}
             departmentName={selectedDeptName}
             salary={salaryGridProps}
+            teamSalary={teamSalaryGridProps}
             readOnly={isSalaryView}
             onBulkSelectionChange={handleBulkSelectionChange}
             onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}
@@ -3119,6 +3140,7 @@ export const TimesheetPage: FC = () => {
           pendingEmployeeId={teamPendingEmployeeId}
           departmentName={selectedDeptName}
           salary={salaryGridProps}
+          teamSalary={teamSalaryGridProps}
           readOnly={isSalaryView}
           onBulkSelectionChange={handleBulkSelectionChange}
           onBulkBlockedSelectionAttempt={handleBulkBlockedSelectionAttempt}

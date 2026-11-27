@@ -12,10 +12,11 @@ import type {
   IPayrollCalcLine,
   PayrollAbsenceStatus,
   PayrollCalc,
-  PayrollCalcCounted,
+  PayrollCalcCountedView,
   PayrollCalcLineCode,
   PayrollCalcLinePart,
   PayrollCalcMissing,
+  PayrollCalcView,
   PayrollPaidItemCode,
 } from '../services/payrollService';
 import { formatPaidAmount, PAYROLL_PAID_GROUPS, type IPaidMonthSums } from './payrollPaid';
@@ -99,8 +100,13 @@ export const CALC_ABSENCE_LABELS: Record<PayrollAbsenceStatus, string> = {
 
 const ABSENCE_ORDER: readonly PayrollAbsenceStatus[] = ['vacation', 'sick', 'educational_leave', 'unpaid'];
 
-/** Месяц посчитан — закрытый или предварительно по живому табелю; иначе посчитать нечем. */
-export const isCalcCounted = (calc: PayrollCalc | undefined): calc is PayrollCalcCounted => (
+/**
+ * Месяц посчитан — закрытый или предварительно по живому табелю; иначе посчитать нечем. Обобщённая: полный расчёт
+ * сужается до PayrollCalcCounted (в том числе в .filter), урезанный (столбец «Зарплата» табеля) — до своего вида.
+ */
+export const isCalcCounted = <T extends PayrollCalcView>(
+  calc: T | undefined,
+): calc is Extract<T, PayrollCalcCountedView> => (
   calc?.state === 'closed' || calc?.state === 'preliminary'
 );
 
@@ -111,14 +117,14 @@ export const calcLineAbsence = (code: PayrollCalcLineCode): PayrollAbsenceStatus
 };
 
 /** Отсутствия месяца с днями: суммы отпускных и больничных — только из 1С. */
-export const calcAbsenceLines = (calc: PayrollCalcCounted): Array<{ status: PayrollAbsenceStatus; label: string; days: number }> => (
+export const calcAbsenceLines = (calc: PayrollCalcCountedView): Array<{ status: PayrollAbsenceStatus; label: string; days: number }> => (
   ABSENCE_ORDER
     .filter(status => (calc.absences[status] ?? 0) > 0)
     .map(status => ({ status, label: CALC_ABSENCE_LABELS[status], days: calc.absences[status] }))
 );
 
 /** Строки расчёта в порядке листка. */
-export const calcLines = (calc: PayrollCalcCounted): IPayrollCalcLine[] => (
+export const calcLines = (calc: PayrollCalcCountedView): IPayrollCalcLine[] => (
   PAYROLL_CALC_LINE_ORDER.flatMap(code => calc.lines.filter(line => line.code === code))
 );
 
@@ -282,7 +288,7 @@ export const ABSENCE_PAID_ITEM: Partial<Record<PayrollAbsenceStatus, PayrollPaid
 };
 
 /** Статьи 1С, которые «Расчёт ФОТ» уже показывает в столбце «1С»: пары строк расчёта и строк отсутствий. */
-const calcShownPaidItems = (calc: PayrollCalcCounted): Set<PayrollPaidItemCode> => {
+const calcShownPaidItems = (calc: PayrollCalcCountedView): Set<PayrollPaidItemCode> => {
   const lines = calcLines(calc);
   const shown = new Set<PayrollPaidItemCode>();
   for (const line of lines) {
@@ -302,7 +308,7 @@ const calcShownPaidItems = (calc: PayrollCalcCounted): Set<PayrollPaidItemCode> 
  * Начисления 1С месяца без своей строки в «Расчёте ФОТ» — строками с ФОТ «—» («Допработы», «Премия», «Резерв»…),
  * чтобы столбец «1С» сходился с «Начислено». Расчёта нет — все начисления 1С.
  */
-export const calcPaidOnlyAccruals = (calc: PayrollCalcCounted | null, paid: readonly IPayslipLine[]): IPayslipLine[] => {
+export const calcPaidOnlyAccruals = (calc: PayrollCalcCountedView | null, paid: readonly IPayslipLine[]): IPayslipLine[] => {
   if (!calc) return [...paid];
   const shown = calcShownPaidItems(calc);
   return paid.filter(line => !shown.has(line.code));

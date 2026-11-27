@@ -61,6 +61,16 @@ export const timesheetKeys = {
 };
 
 /**
+ * Столбец «Зарплата» в табеле руководителя (миграция 382). В ключе — учётка и эпоха доступа: другая учётка во вкладке
+ * и сменившийся доступ не получат прежних сумм из кэша, даже не дождавшись сервера.
+ */
+export const teamSalaryKeys = {
+  all: ['team-salary'] as const,
+  byDepartment: (profileId: string, accessEpoch: number, departmentId: string) =>
+    [...teamSalaryKeys.all, profileId, accessEpoch, departmentId] as const,
+};
+
+/**
  * График сотрудника. Префикс ['employee-schedule', id] сбрасывает событие schedule:changed (useRealtimeQueryInvalidation),
  * поэтому id стоит вторым. plan — блок «График работы» под табелем «По сотруднику», данные на год.
  */

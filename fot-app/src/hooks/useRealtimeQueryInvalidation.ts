@@ -7,6 +7,7 @@ import {
   employeesKeys,
   patentReceiptsKeys,
   structureKeys,
+  teamSalaryKeys,
   timesheetKeys,
   TIMESHEET_FAMILY_KEYS,
 } from '../api/queryKeys';
@@ -54,6 +55,8 @@ export const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     // чтобы блокировка/разблокировка приходила в другие вкладки и другим пользователям.
     timesheetKeys.page(),
     ['approvals-review-list'],
+    // Столбец «Зарплата» руководителя (382): открыли подачу — «сумма → —», закрыли — сумма вернётся без перезагрузки.
+    teamSalaryKeys.all,
   ],
   'daily_task:changed': (payload) => {
     const keys: QueryKey[] = [['daily-tasks']];

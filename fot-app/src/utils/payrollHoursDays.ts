@@ -4,7 +4,7 @@
  * их нет (старый бэкенд, месяц по дням) — расшифровки нет. Снимок нормы показывается, только если его сумма равна
  * норме формулы: иначе цифры разошлись бы, и тогда остаётся одна норма формулы.
  */
-import type { IPayrollCalcHoursDay, IPayrollNormPlan, PayrollCalcCounted } from '../services/payrollService';
+import type { IPayrollCalcHoursDay, IPayrollNormPlan, PayrollCalcCountedView } from '../services/payrollService';
 
 const WEEKDAYS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] as const;
 
@@ -20,7 +20,7 @@ const dayLabel = (iso: string): string => {
 };
 
 /** Норма формулы оклада — из части salary_hours; нет — оклад не по часам. */
-const formulaNormMinutes = (calc: PayrollCalcCounted): number | null => {
+const formulaNormMinutes = (calc: PayrollCalcCountedView): number | null => {
   for (const line of calc.lines) {
     for (const part of line.parts ?? []) {
       if (part.kind === 'salary_hours') return part.norm_minutes;
@@ -30,14 +30,14 @@ const formulaNormMinutes = (calc: PayrollCalcCounted): number | null => {
 };
 
 /** Оклад месяца считается по часам: есть часть salary_hours. */
-export const isSalaryByHoursCalc = (calc: PayrollCalcCounted): boolean => formulaNormMinutes(calc) !== null;
+export const isSalaryByHoursCalc = (calc: PayrollCalcCountedView): boolean => formulaNormMinutes(calc) !== null;
 
 const planTotal = (plan: IPayrollNormPlan): number => (
   Object.values(plan.days).reduce((sum, minutes) => sum + minutes, 0) + (plan.saturdays + plan.sundays) * plan.quota_minutes
 );
 
 /** Снимок нормы, сходящийся с формулой; иначе null. */
-const usablePlan = (calc: PayrollCalcCounted): IPayrollNormPlan | null => {
+const usablePlan = (calc: PayrollCalcCountedView): IPayrollNormPlan | null => {
   const norm = formulaNormMinutes(calc);
   const plan = calc.norm_plan ?? null;
   return plan && norm !== null && planTotal(plan) === norm ? plan : null;
@@ -76,7 +76,7 @@ const quotaName = (plan: IPayrollNormPlan): string => {
 };
 
 /** Таблица «Часы по дням»: даты нормы и даты с часами, по порядку; итог = часы формулы. Нет расшифровки — null. */
-export const buildHoursDaysTable = (calc: PayrollCalcCounted): IHoursDaysTable | null => {
+export const buildHoursDaysTable = (calc: PayrollCalcCountedView): IHoursDaysTable | null => {
   const days = calc.hours_by_day;
   if (!days || days.length === 0) return null;
   const plan = usablePlan(calc);
@@ -132,7 +132,7 @@ const normNote = (plan: IPayrollNormPlan): string => {
  * Подписи под формулой «По трудовому договору» месяца с окладом по часам: часы табеля окладных дней и их число; куда
  * ушли часы, если не все в оклад (переработка, сверх нормы не оплачивается); из чего норма. Нет расшифровки — [].
  */
-export const salaryHoursNotes = (calc: PayrollCalcCounted): string[] => {
+export const salaryHoursNotes = (calc: PayrollCalcCountedView): string[] => {
   const norm = formulaNormMinutes(calc);
   if (norm === null || !calc.hours_by_day) return [];
   // Окладные дни: не бригада и не почасовой сегмент (у них своя часть формулы).

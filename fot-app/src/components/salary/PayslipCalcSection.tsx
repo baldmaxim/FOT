@@ -2,8 +2,8 @@ import type { FC } from 'react';
 
 import type {
   IPayslipSchedule,
-  PayrollCalc,
-  PayrollCalcCounted,
+  PayrollCalcCountedView,
+  PayrollCalcView,
   PayrollPaidItemCode,
 } from '../../services/payrollService';
 import {
@@ -30,7 +30,7 @@ interface IPayslipCalcSectionProps {
   /** Листок ещё грузится — «…». */
   loading: boolean;
   /** Расчёт ФОТ месяца; нет (старый бэкенд, ошибка) — только 1С, если суммы есть. */
-  calc: PayrollCalc | undefined;
+  calc: PayrollCalcView | undefined;
   /** Графики месяца — справочно; нет у старого бэкенда. */
   schedules: readonly IPayslipSchedule[] | undefined;
   /** Суммы «Оплачено» (1С) истории: столбец «1С» — если за месяц они есть. */
@@ -62,7 +62,7 @@ export const PayslipCalcSection: FC<IPayslipCalcSectionProps> = ({
   const schedulesNote = formatPayslipSchedules(schedules);
 
   /** counted null — расчёта ФОТ нет: строки только из 1С. */
-  const renderTable = (counted: PayrollCalcCounted | null) => {
+  const renderTable = (counted: PayrollCalcCountedView | null) => {
     const missing = counted ? calcMissingNote(counted.missing) : null;
     const lines = counted ? calcLines(counted) : [];
     // Табель не закрыт: по какой день он взят; норма часов и месячные доплаты (проезд, квартира) — за полный месяц.

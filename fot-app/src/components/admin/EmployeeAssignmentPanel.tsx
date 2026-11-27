@@ -843,6 +843,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               supervisorKtu={brigadeOutput.showSupervisorKtu
                 ? { checked: brigadeOutput.supervisorKtu, onToggle: brigadeOutput.toggleSupervisorKtu }
                 : undefined}
+              teamSalary={brigadeOutput.showTeamSalary
+                ? {
+                  checked: brigadeOutput.teamSalary,
+                  onToggle: brigadeOutput.toggleTeamSalary,
+                  departments: brigadeOutput.managedDepartments,
+                }
+                : undefined}
               loading={brigadeOutput.isLoading}
               error={brigadeOutput.isError}
             />

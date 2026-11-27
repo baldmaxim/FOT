@@ -1367,6 +1367,16 @@
   color: var(--text-primary);
 }
 
+/* Подпись под галочкой (вкладка «Выработка», «Зарплата своих» — отделы руководителя): отдельной строкой. */
+.departmentAccessItemNote {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 /* Лист с галкой «только просмотр»: чекбокс+имя слева, переключатель уровня справа. */
 .departmentAccessItemRow {
   align-items: center;

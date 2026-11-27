@@ -6514,3 +6514,92 @@
   outline: none;
   transform: none;
 }
+
+/* ===== Столбец «Зарплата» руководителя (миграция 382) =====
+   Крайний справа и закреплён; «Откл.», «Часы» и «Дни» сдвигаются на его ширину (модификатор таблицы).
+   Правила стоят в конце файла: перекрывают смещения базовых правил, в том числе в блоке ≤480 px. */
+.ts-table th.ts-col-team-salary-sticky,
+.ts-table td.ts-col-team-salary-sticky {
+  position: sticky;
+  right: 0;
+  z-index: 15;
+  box-sizing: border-box;
+  width: 112px;
+  min-width: 112px;
+  max-width: 112px;
+  padding: 2px 4px;
+  background: var(--surface);
+  text-align: right;
+  /* Явный размер: в узких раскладках шрифт сетки крупнее, и «1 234 567,89» вылезал за 112 px. */
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ts-table thead th.ts-col-team-salary-sticky {
+  z-index: 55;
+  width: 112px;
+  min-width: 112px;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+.ts-table tbody tr:hover td.ts-col-team-salary-sticky {
+  background: var(--surface-hover);
+}
+.ts-table td.ts-col-team-salary-sticky.ts-team-salary--muted {
+  color: var(--text-tertiary);
+  text-align: center;
+  font-weight: 400;
+}
+.ts-table--team-salary th.ts-col-deviation-sticky,
+.ts-table--team-salary td.ts-col-deviation-sticky {
+  right: 112px;
+}
+.ts-table--team-salary th.ts-col-sum-sticky,
+.ts-table--team-salary td.ts-col-sum-sticky {
+  right: 176px;
+}
+.ts-table--team-salary th.ts-col-days-sticky,
+.ts-table--team-salary td.ts-col-days-sticky {
+  right: 240px;
+}
+@media (max-width: 480px) {
+  .ts-table th.ts-col-team-salary-sticky,
+  .ts-table td.ts-col-team-salary-sticky,
+  .ts-table thead th.ts-col-team-salary-sticky {
+    width: 96px;
+    min-width: 96px;
+    max-width: 96px;
+    font-size: 11px;
+  }
+  .ts-table--team-salary th.ts-col-deviation-sticky,
+  .ts-table--team-salary td.ts-col-deviation-sticky {
+    right: 96px;
+  }
+  .ts-table--team-salary th.ts-col-sum-sticky,
+  .ts-table--team-salary td.ts-col-sum-sticky {
+    right: 148px;
+  }
+  .ts-table--team-salary th.ts-col-days-sticky,
+  .ts-table--team-salary td.ts-col-days-sticky {
+    right: 200px;
+  }
+}
+
+/* Мобильная карточка: «Зарплата · окт.: 139 942,00» под ФИО. */
+.ts-team-salary-mobile-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 12px 8px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.ts-team-salary-mobile-label {
+  color: var(--text-secondary);
+}
+.ts-team-salary-mobile-row .ts-team-salary--muted,
+.ts-team-salary-mobile-row.ts-team-salary--muted {
+  color: var(--text-tertiary);
+}

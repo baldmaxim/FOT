@@ -7,6 +7,7 @@ import {
   dashboardKeys,
   employeesKeys,
   structureKeys,
+  teamSalaryKeys,
   timesheetKeys,
 } from '../api/queryKeys';
 import { wsService } from '../services/websocket';
@@ -80,6 +81,11 @@ interface AuthContextType extends AuthState {
    * нужной страницы, кнопку не увидит и на сервере получит 403.
    */
   canManageAsHrAdmin: (pagePath: string) => boolean;
+  /**
+   * Эпоха доступа к зарплатам своих (миграция 382): растёт при каждом 'profile:access_changed'. Входит в ключ запроса
+   * столбца «Зарплата» — после смены назначений прежние суммы не показываются, пока сервер не подтвердит доступ.
+   */
+  teamSalaryEpoch: number;
   getRoleLabel: (code: string) => string;
   /**
    * @deprecated Используйте canViewPage/canEditPage или isAdmin.
@@ -105,6 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [state, setState] = useState<AuthState>(initialState);
   const [roles, setRoles] = useState<RoleLabel[]>([]);
   const [token, setToken] = useState<string | null>(getSessionToken());
+  const [teamSalaryEpoch, setTeamSalaryEpoch] = useState(0);
   const queryClient = useQueryClient();
 
   useEffect(() => subscribeSessionToken(setToken), []);
@@ -217,9 +224,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     sessionStorage.removeItem('2fa_verified');
     // Режимы, поиск и фильтры экранов («Проживание») — следующей учётке в этой вкладке не достаются.
     clearSessionStates(browserSessionStorage());
+    // Зарплаты своих (миграция 382) — следующей учётке в этой вкладке не достаются и из кэша.
+    queryClient.removeQueries({ queryKey: teamSalaryKeys.all });
+    setTeamSalaryEpoch(epoch => epoch + 1);
     setRoles([]);
     setState({ ...initialState, loading: false });
-  }, []);
+  }, [queryClient]);
 
   // Сотрудника уволили во время работы: бэкенд начинает отдавать 403
   // EMPLOYEE_DISMISSED на каждый запрос. Без сброса состояния человек остался бы
@@ -299,6 +309,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     wsService.connect(token, 'auth-context');
 
     const applyAccessChanged = () => {
+      // Зарплаты своих (миграция 382): новая эпоха — столбец без сумм, пока сервер заново не подтвердит доступ.
+      setTeamSalaryEpoch(epoch => epoch + 1);
+      queryClient.removeQueries({ queryKey: teamSalaryKeys.all });
       void refreshProfileRef.current();
       void queryClient.invalidateQueries({ queryKey: structureKeys.all });
       void queryClient.invalidateQueries({ queryKey: employeesKeys.all });
@@ -453,6 +466,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     canViewPage,
     canEditPage,
     canManageAsHrAdmin,
+    teamSalaryEpoch,
     getRoleLabel,
     hasPermission,
   };

@@ -37,6 +37,7 @@ import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { EMPLOYEE_PAYSLIP_PAGE, hasEmployeePayslipAccess } from '../services/employee-payslip-access.service.js';
 import { PAYROLL_SECTION_PAGES, hasPayrollSectionAccess } from '../services/payroll/payroll-access.service.js';
 import { hasBrigadeOutputGrant, resolveSupervisorKtuBrigadeIds } from '../services/payroll/brigade-output-access.service.js';
+import { resolveTeamSalaryDepartmentIds } from '../services/payroll/team-salary-access.service.js';
 import {
   listStaffTabGrants,
   resolveStaffTabProfileFlags,
@@ -257,6 +258,9 @@ async function buildProfileResponse(
   // «Ставить КТУ своим бригадам» (миграция 370) — только при отсутствии «Выработки»: та шире. Эффективный список (галочка ∧
   // текущие бригады начальника) — по нему фронт открывает «Зарплату по объектам», как гард и контроллер.
   const supervisor_brigade_ids = has_brigade_output_access ? [] : await resolveSupervisorKtuBrigadeIds(profile.employee_id);
+  // «Зарплата своих» (миграция 382): столбец «Зарплата» в табеле — галочка ∧ отделы руководителя (fail-closed). Какой
+  // отдел из охвата, решает сервер на каждом запросе столбца; флаг только включает запрос на фронте.
+  const has_team_salary_access = (await resolveTeamSalaryDepartmentIds(profile.employee_id)).length > 0;
 
   // Галочки «Проживание»/«Удержания» в назначениях (миграция 351) — зеркало ветки в resolveEffectivePageAccess:
   // без этих строк бэк запрос пропустит, а фронт вкладку не покажет.
@@ -298,6 +302,7 @@ async function buildProfileResponse(
     has_timesheet_view_employees,
     has_brigade_output_access,
     supervisor_brigade_ids,
+    has_team_salary_access,
     staff_tab_role_edit: staffTabFlags.roleEdit,
     can_grant_staff_tabs: staffTabFlags.canGrant,
     // Кнопки «Перевести в неактивные» / «Вернуть в активные» (миграция 381): флаг учётки, не роль.

@@ -20,3 +20,9 @@ describe('EVENT_TO_KEYS: график сотрудника', () => {
     expect(EVENT_TO_KEYS['production_calendar:changed']({})).toContainEqual(['employee-schedule']);
   });
 });
+
+describe('EVENT_TO_KEYS: столбец «Зарплата» руководителя (382)', () => {
+  it('timesheet_approval:changed (открыли или закрыли подачу) — обновляет столбец', () => {
+    expect(EVENT_TO_KEYS['timesheet_approval:changed']({})).toContainEqual(['team-salary']);
+  });
+});

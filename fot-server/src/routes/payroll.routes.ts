@@ -5,7 +5,11 @@ import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import { acceptPayout1cFile, requirePayouts1cImport } from '../middleware/payout1cUpload.js';
 import { acceptSupplementFiles } from '../middleware/payrollSupplementFilesUpload.js';
-import { requireBrigadeOutputAccess, requireBrigadeSalaryAccess } from '../middleware/brigadeOutputAccess.js';
+import {
+  requireBrigadeOutputAccess,
+  requireBrigadeSalaryAccess,
+  requireTeamSalaryAccess,
+} from '../middleware/brigadeOutputAccess.js';
 import { payroll1cPayoutsController } from '../controllers/payroll-1c-payouts.controller.js';
 import { payrollCardExportController } from '../controllers/payroll-card-export.controller.js';
 import { payrollCompensationStopsController } from '../controllers/payroll-compensation-stops.controller.js';
@@ -28,6 +32,7 @@ import { payrollTermsController } from '../controllers/payroll-terms.controller.
 import { payrollTermsRecalcController } from '../controllers/payroll-terms-recalc.controller.js';
 import { payrollVacationController } from '../controllers/payroll-vacation.controller.js';
 import { timesheetSalaryController } from '../controllers/timesheet-salary.controller.js';
+import { teamSalaryController } from '../controllers/team-salary.controller.js';
 
 const router = Router();
 
@@ -201,5 +206,10 @@ router.put('/timesheet-salary/output', requireBrigadeOutputAccess, timesheetSala
 router.put('/timesheet-salary/object-output', requireBrigadeOutputAccess, timesheetSalaryController.setObjectOutput);
 router.put('/timesheet-salary/ktu', requireBrigadeSalaryAccess, timesheetSalaryController.setKtu);
 router.put('/timesheet-salary/share', requireBrigadeOutputAccess, timesheetSalaryController.setShare);
+
+// ─── Столбец «Зарплата» в табеле руководителя (миграция 382) ─────────────────
+// Галочка «Видеть зарплату своих сотрудников в табеле» ∧ отделы руководителя с подотделами ∧ страница табеля; отдел —
+// в контроллере. Месяц выбирает сервер (всегда прошлый), только чтение.
+router.get('/team-salary', requireTeamSalaryAccess, teamSalaryController.get);
 
 export default router;

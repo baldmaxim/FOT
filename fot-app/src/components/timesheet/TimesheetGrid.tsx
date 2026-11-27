@@ -34,6 +34,12 @@ import {
   type ITimesheetSalaryGridProps,
 } from './TimesheetSalaryCells';
 import {
+  TimesheetTeamSalaryCell,
+  TimesheetTeamSalaryHeader,
+  TimesheetTeamSalaryMobileRow,
+  type ITimesheetTeamSalaryGridProps,
+} from './TimesheetTeamSalaryCell';
+import {
   TimesheetSalaryCalcGroups,
   TimesheetSalaryCalcRows,
   TimesheetSalaryGroupOutput,
@@ -97,6 +103,11 @@ export interface ITimesheetGridProps {
    * «Выработка, ₽» у объекта, «Доля», «Сумма» и «Итого по бригаде».
    */
   objectsSalary?: ITimesheetObjectsSalary;
+  /**
+   * Столбец «Зарплата» руководителя (миграция 382): к выплате за прошлый месяц, последним и закреплённым справа.
+   * Отдельно от salary: тот проп меняет клетки УУ/РБ/УД и «Часы» вкладки «Зарплата».
+   */
+  teamSalary?: ITimesheetTeamSalaryGridProps;
   /** Заголовок вместо стандартного: на вкладке кадров «Выходные» — название отдела. */
   headerTitle?: string;
   /** Кнопки справа в шапке сетки. */
@@ -535,6 +546,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   departmentName,
   salary,
   objectsSalary,
+  teamSalary,
   headerTitle,
   headerActions,
   hideLegend = false,
@@ -589,6 +601,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const showDeviationColumn = viewMode === 'employees';
   const showSumColumn = viewMode === 'employees';
   const showDaysColumn = viewMode === 'employees';
+  // «Зарплата» руководителя — только в обычной сетке «По сотрудникам», не во вкладке «Зарплата по отделам».
+  const showTeamSalaryColumn = viewMode === 'employees' && teamSalary !== undefined && salary === undefined;
   const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<string>>(new Set());
   const [bulkDragAnchor, setBulkDragAnchor] = useState<IBulkCellCoord | null>(null);
   const [bulkDragBaseKeys, setBulkDragBaseKeys] = useState<Set<string>>(new Set());
@@ -1418,6 +1432,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </div>
                 </div>
                 {salary && showSalaryColumn && <TimesheetSalaryMobileRow salary={salary} employee={row.employee} />}
+                {showTeamSalaryColumn && teamSalary && (
+                  <TimesheetTeamSalaryMobileRow
+                    teamSalary={teamSalary}
+                    employeeId={row.employee.id}
+                    employeeName={formatTimesheetEmployeeName(row.employee.full_name)}
+                  />
+                )}
 
                 {expanded && (() => {
                   const firstDay = days[0] ?? 1;
@@ -1759,7 +1780,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
 
   const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)
-    + (showSalaryColumn ? 1 : 0) + (showSalaryLineColumns ? 2 : 0);
+    + (showSalaryColumn ? 1 : 0) + (showSalaryLineColumns ? 2 : 0) + (showTeamSalaryColumn ? 1 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1771,7 +1792,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       </div>
 
       <div className="ts-table-scroll" ref={setTableScrollElement}>
-        <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${viewOnly ? ' ts-table--readonly' : ''}`}>
+        <table
+          className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}${viewOnly ? ' ts-table--readonly' : ''}${
+            showTeamSalaryColumn ? ' ts-table--team-salary' : ''}`}
+        >
           <thead>
             <tr>
               <th className="ts-col-sticky">Сотрудник</th>
@@ -1819,6 +1843,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   Откл.
                 </th>
               )}
+              {showTeamSalaryColumn && teamSalary && <TimesheetTeamSalaryHeader teamSalary={teamSalary} />}
             </tr>
           </thead>
           {employeeRows.length === 0 ? (
@@ -2027,6 +2052,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })()}
+                    {showTeamSalaryColumn && teamSalary && (
+                      <TimesheetTeamSalaryCell
+                        teamSalary={teamSalary}
+                        employeeId={row.employee.id}
+                        employeeName={formatTimesheetEmployeeName(row.employee.full_name)}
+                      />
+                    )}
                   </tr>
                   {expanded && row.hasExpandableObjects && row.objectRows.map(objectRow => (
                     <tr key={`${row.employee.id}_${objectRow.object_key}`} className="ts-object-row">
@@ -2089,6 +2121,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       {showDaysColumn && <td className="ts-col-days-sticky" />}
                       {showSumColumn && <td className="ts-col-sum-sticky" />}
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}
+                      {showTeamSalaryColumn && <td className="ts-col-team-salary-sticky" />}
                     </tr>
                   ))}
                 </tbody>

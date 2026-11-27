@@ -655,6 +655,17 @@ export type PayrollCalcCounted = IPayrollCalcClosed | IPayrollCalcPreliminary;
 
 export type PayrollCalc = PayrollCalcCounted | IPayrollCalcNotClosed;
 
+/**
+ * Поля расчёта, которые читают блок «Расчёт ФОТ» (PayslipCalcSection) и его утилиты, — без служебных quality,
+ * basis_ids, version_ids. Полный расчёт подходит структурно; урезанный ответ столбца «Зарплата» табеля (миграция 382)
+ * — тоже, без приведения к полному типу.
+ */
+type PayrollCalcViewFields = Omit<IPayrollCalcClosed, 'state' | 'quality' | 'basis_ids' | 'version_ids'>;
+
+export type PayrollCalcCountedView = (PayrollCalcViewFields & { state: 'closed' }) | IPayrollCalcPreliminary;
+
+export type PayrollCalcView = PayrollCalcCountedView | IPayrollCalcNotClosed;
+
 export type PayslipRateAllowanceCode = 'travel' | 'housing' | 'dormitory_allowance';
 
 /** Сумма по ставке «Справочника» за месяц листка — NUMERIC строкой. */
