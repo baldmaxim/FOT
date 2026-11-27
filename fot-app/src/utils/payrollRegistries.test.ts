@@ -104,6 +104,29 @@ describe('«Доплата»', () => {
     expect([planned, bare, legacy].map(row => commentColumn?.text(row))).toEqual(['Совмещение секретаря', '—', '—']);
   });
 
+  it('комментарий разовой (миграция 385): отдельно от основания; у плановой и квартиры — нет; xlsx — «Комментарий»', () => {
+    const planned = supplement({ id: 7, date_from: '2026-10-01', date_to: null, comment: 'Совмещение секретаря' });
+    const once = (id: number, comment?: string | null) => supplement({
+      kind: 'one_time', id, month: '2026-10', date_from: null, date_to: null, reason: 'Премия', comment,
+    });
+    const rows = buildSupplementRegistryRows(
+      [planned, once(8, 'за сдачу объекта'), once(9, null), once(10)], [apartment({})], ['2026-10'],
+    ) ?? [];
+    expect(rows.map(row => [row.key, row.reason, row.comment])).toEqual([
+      ['planned-7', 'Совмещение секретаря', null],
+      ['once-8', 'Премия', 'за сдачу объекта'],
+      ['once-9', 'Премия', null],
+      ['once-10', 'Премия', null],
+      ['apartment-5-2026-10', 'Квартира', null],
+    ]);
+    // Столбец «Основание» на экране (его фильтр и сортировка) — только основание.
+    expect(rows.map(row => cells(row)[3])).toEqual(['Совмещение секретаря', 'Премия', 'Премия', 'Премия', 'Квартира']);
+    expect(SUPPLEMENT_COLUMNS.map(column => column.key)).not.toContain('comment');
+    const exported = buildSupplementExport(rows);
+    const index = exported.columns.findIndex(column => column.label === 'Комментарий');
+    expect(exported.rows.map(row => row.cells[index])).toEqual(['—', 'за сдачу объекта', '—', '—', '—']);
+  });
+
   it('квартира в «Доплате за месяц»: «Плановая», сумма за месяц из расчёта, период — месяц, основание «Квартира»', () => {
     const rows = buildSupplementRegistryRows(
       [],
@@ -211,7 +234,7 @@ describe('«Доплата»', () => {
     const all = buildSupplementRegistryRows([supplement({})], [apartment({})], ['2026-10']) ?? [];
     expect(buildSupplementExport(all)).toMatchObject({ title: 'Доплата за месяц', file_name: at('Доплата_за_месяц') });
     expect(buildSupplementExport(all).columns.map(column => column.label))
-      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание', 'Файлы']);
+      .toEqual(['№', 'ФИО', 'Отдел', 'Должность', 'Вид', 'Сумма, ₽', 'Период', 'Основание', 'Комментарий', 'Файлы']);
     expect(buildPlannedSupplementExport([supplement({})])).toMatchObject({
       title: 'Плановые доплаты', file_name: at('Плановые_доплаты'),
     });
@@ -268,10 +291,20 @@ describe('формы', () => {
   });
 
   it('разовая: основание обязательно и без лишних пробелов', () => {
-    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '100', reason: '   ' }))
+    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '100', reason: '   ', comment: '' }))
       .toMatchObject({ ok: false, field: 'reason' });
-    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '100', reason: ' Премия  за объект ' }))
-      .toEqual({ ok: true, payload: { month: '2026-10', amount: 100, reason: 'Премия за объект' } });
+    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '100', reason: ' Премия  за объект ', comment: '' }))
+      .toEqual({ ok: true, payload: { month: '2026-10', amount: 100, reason: 'Премия за объект', comment: null } });
+  });
+
+  it('разовая: комментарий (миграция 385) — пробелы по краям срезаются, пусто — null, до 500 символов', () => {
+    const draft = { selected: true, month: '2026-10', amount: '100', reason: 'Премия' };
+    expect(parseOneTimeForm({ ...draft, comment: '  за сдачу объекта ' }))
+      .toEqual({ ok: true, payload: { month: '2026-10', amount: 100, reason: 'Премия', comment: 'за сдачу объекта' } });
+    expect(parseOneTimeForm({ ...draft, comment: '   ' })).toMatchObject({ ok: true, payload: { comment: null } });
+    expect(parseOneTimeForm({ ...draft, comment: 'я'.repeat(500) })).toMatchObject({ ok: true });
+    expect(parseOneTimeForm({ ...draft, comment: 'я'.repeat(501) }))
+      .toEqual({ ok: false, field: 'comment', message: 'Комментарий — не больше 500 символов' });
   });
 
   it('период «с — по»: «по» пусто — бессрочно, один день — можно; подпись «с» — в сообщении', () => {

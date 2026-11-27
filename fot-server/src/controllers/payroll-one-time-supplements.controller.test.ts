@@ -76,7 +76,7 @@ const multipart = (data: unknown, files: Express.Multer.File[], over: Record<str
 const file = (id: number, name = `Файл ${id}.pdf`) => ({ id, file_name: name, file_size: 100, mime_type: 'application/pdf' });
 const ROW = {
   id: 5, employee_id: 42, full_name: 'Сорокин Юрий Николаевич', month: '2026-10', amount: '3300.00',
-  reason: FIELDS.reason, files: [file(7)],
+  reason: FIELDS.reason, comment: null, files: [file(7)],
 };
 
 let keySeq = 0;
@@ -285,6 +285,76 @@ describe('правка: файлы', () => {
     const res = makeRes();
     await c.updateOneTime(makeReq({ params: { id: '5' }, body: { ...FIELDS, remove_file_ids: [7] } }), res);
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('комментарий (миграция 385)', () => {
+  const saved = { status: 'saved', before: ROW, after: ROW, changed: true, removedKeys: [] };
+
+  it('добавление: пробелы по краям срезаются, пусто — null, нет ключа — undefined (сервис запишет null)', async () => {
+    for (const [comment, expected] of [['  за сдачу объекта  ', 'за сдачу объекта'], ['   ', null], [null, null]] as const) {
+      supplements.addOneTimeSupplement.mockClear();
+      const res = makeRes();
+      await c.addOneTime(makeReq({ body: { employee_id: 42, ...FIELDS, comment } }), res);
+      expect(res.statusCode, String(comment)).toBe(200);
+      expect(supplements.addOneTimeSupplement).toHaveBeenCalledWith(42, { ...FIELDS, comment: expected }, expect.anything());
+    }
+    supplements.addOneTimeSupplement.mockClear();
+    await c.addOneTime(makeReq({ body: { employee_id: 42, ...FIELDS } }), makeRes());
+    expect(supplements.addOneTimeSupplement.mock.calls[0][1]).not.toHaveProperty('comment');
+  });
+
+  it('multipart: комментарий в data доходит до сервиса', async () => {
+    const res = makeRes();
+    await c.addOneTime(multipart({ employee_id: 42, ...FIELDS, comment: 'по приказу № 12' }, [PDF()]), res);
+    expect(res.statusCode).toBe(200);
+    expect(supplements.addOneTimeSupplement).toHaveBeenCalledWith(
+      42, { ...FIELDS, comment: 'по приказу № 12' }, expect.anything(),
+    );
+  });
+
+  it('правка: прежний клиент без ключа — undefined (комментарий не трогать), null — стереть', async () => {
+    supplements.updateOneTimeSupplement.mockResolvedValue(saved);
+    await c.updateOneTime(makeReq({ params: { id: '5' }, body: FIELDS }), makeRes());
+    expect(supplements.updateOneTimeSupplement.mock.calls[0][1]).not.toHaveProperty('comment');
+
+    await c.updateOneTime(makeReq({ params: { id: '5' }, body: { ...FIELDS, comment: null } }), makeRes());
+    expect(supplements.updateOneTimeSupplement.mock.calls[1][1]).toEqual({ ...FIELDS, comment: null });
+  });
+
+  it('длиннее 500 символов или не текст — 400 без записи', async () => {
+    for (const comment of ['я'.repeat(501), 42]) {
+      const res = makeRes();
+      await c.addOneTime(makeReq({ body: { employee_id: 42, ...FIELDS, comment } }), res);
+      expect(res.statusCode).toBe(400);
+      const edit = makeRes();
+      await c.updateOneTime(makeReq({ params: { id: '5' }, body: { ...FIELDS, comment } }), edit);
+      expect(edit.statusCode).toBe(400);
+    }
+    expect(supplements.addOneTimeSupplement).not.toHaveBeenCalled();
+    expect(supplements.updateOneTimeSupplement).not.toHaveBeenCalled();
+
+    const exact = makeRes();
+    await c.addOneTime(makeReq({ body: { employee_id: 42, ...FIELDS, comment: 'я'.repeat(500) } }), exact);
+    expect(exact.statusCode).toBe(200);
+  });
+
+  it('аудит правки — комментарий до и после', async () => {
+    const after = { ...ROW, comment: 'за сдачу объекта' };
+    supplements.updateOneTimeSupplement.mockImplementation(async (_id, _input, options) => {
+      await options.audit('tx', ROW, after);
+      return { status: 'saved', before: ROW, after, changed: true, removedKeys: [] };
+    });
+    await c.updateOneTime(makeReq({ params: { id: '5' }, body: { ...FIELDS, comment: 'за сдачу объекта' } }), makeRes());
+    expect(audit.logFromRequestWithClient).toHaveBeenCalledWith(
+      'tx', expect.anything(), 'user-1', 'PAYROLL_ONE_TIME_SUPPLEMENT_UPDATED',
+      expect.objectContaining({
+        details: expect.objectContaining({
+          from: expect.objectContaining({ comment: null }),
+          to: expect.objectContaining({ comment: 'за сдачу объекта' }),
+        }),
+      }),
+    );
   });
 });
 

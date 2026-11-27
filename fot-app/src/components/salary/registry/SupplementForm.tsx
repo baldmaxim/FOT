@@ -48,9 +48,9 @@ const isNotEditable = (candidate: IPayrollRegistryCandidate): boolean => !candid
 /**
  * «Добавить сотрудника» / ✎ доплаты: плановая — сумма ₽/мес, период «с — по» и необязательный комментарий (та же, что
  * «Плановые доплаты» окна сотрудника; новый период после закончившегося — можно, пересечение с текущей отклоняет
- * сервер); разовая —
- * месяц, сумма и основание из списка (за месяц — сколько угодно); ✎ у основания — окно «Основания доплаты»;
- * «Файлы» (миграция 354) — прикрепить и снять, всё применяется по «Сохранить» одним запросом с полями.
+ * сервер); разовая — месяц, сумма, основание из списка (за месяц — сколько угодно) и необязательный комментарий
+ * (миграция 385); ✎ у основания — окно «Основания доплаты»; «Файлы» (миграция 354) — прикрепить и снять, всё
+ * применяется по «Сохранить» одним запросом с полями.
  */
 export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, onClose, onSaved }) => {
   const errorId = useId();
@@ -60,7 +60,7 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
   const [amount, setAmount] = useState(rateAmountInputValue(row?.amount));
   const [dateFrom, setDateFrom] = useState(row?.date_from ?? '');
   const [dateTo, setDateTo] = useState(row?.date_to ?? '');
-  // Комментарий плановой (миграция 364); у старого бэкенда поля нет — пусто.
+  // Комментарий доплаты (плановая — миграция 364, разовая — 385); у старого бэкенда поля нет — пусто.
   const [comment, setComment] = useState(row?.comment ?? '');
   const currentMonth = moscowTodayIso().slice(0, 7);
   const [month, setMonth] = useState(row?.month ?? currentMonth);
@@ -106,7 +106,7 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
       else await payrollRegistryService.addPlanned(employeeId, parsed.payload);
       return true;
     }
-    const parsed = parseOneTimeForm({ selected, month, amount, reason });
+    const parsed = parseOneTimeForm({ selected, month, amount, reason, comment });
     if (!parsed.ok) {
       setError({ field: parsed.field, message: parsed.message });
       return false;
@@ -240,21 +240,19 @@ export const SupplementForm: FC<ISupplementFormProps> = ({ row, kind: newKind, o
           />
         )}
 
-        {kind === 'planned' && (
-          <label className={styles.field}>
-            <span className={styles.label}>Комментарий</span>
-            <ClearableInput
-              value={comment}
-              onValueChange={value => { setComment(value); clearError(); }}
-              maxLength={PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH}
-              autoComplete="off"
-              disabled={saving}
-              aria-invalid={error?.field === 'comment' || undefined}
-              aria-describedby={error ? errorId : undefined}
-              clearLabel="Очистить комментарий"
-            />
-          </label>
-        )}
+        <label className={styles.field}>
+          <span className={styles.label}>Комментарий</span>
+          <ClearableInput
+            value={comment}
+            onValueChange={value => { setComment(value); clearError(); }}
+            maxLength={PLANNED_SUPPLEMENT_COMMENT_MAX_LENGTH}
+            autoComplete="off"
+            disabled={saving}
+            aria-invalid={error?.field === 'comment' || undefined}
+            aria-describedby={error ? errorId : undefined}
+            clearLabel="Очистить комментарий"
+          />
+        </label>
 
         {kind === 'one_time' && (
           <SupplementFilesField

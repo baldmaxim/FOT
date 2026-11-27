@@ -65,7 +65,10 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
-  /** Плановая: комментарий периода (миграция 364); у разовой — null, у старого бэкенда — нет. */
+  /**
+   * Плановая — комментарий периода (миграция 364), разовая — комментарий доплаты (миграция 385); у старого бэкенда —
+   * нет.
+   */
   comment?: string | null;
   /** Файлы разовой (миграция 354) по порядку прикрепления; у плановой — пусто, у старого бэкенда — нет. */
   files?: IPayrollSupplementFile[];
@@ -176,6 +179,8 @@ export interface IOneTimeSupplementFields {
   month: string;
   amount: number;
   reason: string;
+  /** Комментарий (миграция 385): null — без комментария. */
+  comment: string | null;
 }
 
 /** Основание из списка «Основания доплаты» (миграция 340); у доплаты основание — текст, не id. */

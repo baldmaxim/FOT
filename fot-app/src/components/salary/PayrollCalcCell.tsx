@@ -18,7 +18,6 @@ import {
 } from '../../utils/payrollCalcColumns';
 import { formatPaidAmount } from '../../utils/payrollPaid';
 import styles from './PayrollTermsTable.module.css';
-import { PayrollZup3Badge } from './PayrollZup3Badge';
 
 /** Столбцы состава зарплаты «Расчётов»: ФОТ по табелю и суммы 1С (payrollCalcColumns.ts). */
 export type PayrollCalcCellColumn =
@@ -102,13 +101,6 @@ export const PayrollCalcCell: FC<IPayrollCalcCellProps> = ({ column, row, classN
               {amounts}
             </button>
           ) : amounts}
-          {(row.zup3_export ?? []).map(cell => (
-            <PayrollZup3Badge
-              key={`${cell.month}|${cell.half}`}
-              cell={cell}
-              showMonth={new Set((row.zup3_export ?? []).map(item => item.month)).size > 1}
-            />
-          ))}
         </td>
       );
     }

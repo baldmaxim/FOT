@@ -33,9 +33,6 @@ vi.mock('../services/payroll/payroll-registry-scope.service.js', async importOri
   resolvePayrollStaffScope: vi.fn(async () => ({ contractorRootId: null, departmentIds: null })),
 }));
 
-// Статусы выгрузки в ЗУП3 (миграция 373) — не про очередь: пусто.
-vi.mock('../services/staff-month-1c.export-state.js', () => ({ loadZup3ExportStates: vi.fn(async () => new Map()) }));
-
 vi.mock('../services/payroll/payroll-calc-columns.service.js', async importOriginal => ({
   ...await importOriginal<typeof import('../services/payroll/payroll-calc-columns.service.js')>(),
   getCalcColumns: h.getCalcColumns,

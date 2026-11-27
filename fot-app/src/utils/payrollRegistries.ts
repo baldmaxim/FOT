@@ -143,6 +143,8 @@ export interface ISupplementRegistryRow extends ISupplementPeriodFields {
    */
   amount: string | null;
   reason: string | null;
+  /** Комментарий разовой (миграция 385) — под основанием; у плановой null: её комментарий — в reason. */
+  comment: string | null;
   can_edit: boolean;
   supplement: IPayrollSupplementRow | null;
   housing: IHousingAllowanceRow | null;
@@ -156,8 +158,10 @@ export const supplementFileCount = (row: ISupplementRegistryRow): number | null 
 
 /**
  * «Доплата за месяц», семь столбцов: «Период» различает строки одного сотрудника (их ФИО — один раз, EMPLOYEE_ROW_GROUP). Отдел и
- * должность уже — таблица без прокрутки влезает в окно на 1280px. Файлы разовой — кнопкой 📎N в ячейке «Основание»
- * (SupplementRegistry): отдельному столбцу на 1280px места нет; в xlsx — столбец «Файлы» (SUPPLEMENT_FILES_EXPORT_COLUMN).
+ * должность уже — таблица без прокрутки влезает в окно на 1280px. Файлы и комментарий разовой — кнопкой 📎N и строкой
+ * под основанием в ячейке «Основание» (SupplementRegistry): отдельным столбцам на 1280px места нет; в xlsx — столбцы
+ * «Комментарий» и «Файлы» (SUPPLEMENT_COMMENT_EXPORT_COLUMN, SUPPLEMENT_FILES_EXPORT_COLUMN). Фильтр и сортировка
+ * «Основания» — по основанию.
  */
 export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegistryRow>> = [
   ...employeeColumns<ISupplementRegistryRow>({ department: 112, position: 144 }),
@@ -177,6 +181,12 @@ export const SUPPLEMENT_COLUMNS: ReadonlyArray<IRegistryColumn<ISupplementRegist
     text: row => orDash(row.reason), sortValue: row => row.reason,
   },
 ];
+
+/** xlsx «Доплаты за месяц»: комментарий разовой, без него — «—» (на экране — под основанием). */
+export const SUPPLEMENT_COMMENT_EXPORT_COLUMN: IRegistryColumn<ISupplementRegistryRow> = {
+  key: 'comment', label: 'Комментарий', type: 'text',
+  text: row => orDash(row.comment), sortValue: row => row.comment,
+};
 
 /** xlsx «Доплаты за месяц»: число файлов разовой, без файлов — «—» (на экране — 📎N у основания). */
 export const SUPPLEMENT_FILES_EXPORT_COLUMN: IRegistryColumn<ISupplementRegistryRow> = {
@@ -286,7 +296,9 @@ const buildSnapshot = <Row,>(title: string, columns: ReadonlyArray<IRegistryColu
   };
 
 export const buildHousingExport = buildSnapshot('Квартира', HOUSING_COLUMNS);
-export const buildSupplementExport = buildSnapshot('Доплата за месяц', [...SUPPLEMENT_COLUMNS, SUPPLEMENT_FILES_EXPORT_COLUMN]);
+export const buildSupplementExport = buildSnapshot(
+  'Доплата за месяц', [...SUPPLEMENT_COLUMNS, SUPPLEMENT_COMMENT_EXPORT_COLUMN, SUPPLEMENT_FILES_EXPORT_COLUMN],
+);
 export const buildPlannedSupplementExport = buildSnapshot('Плановые доплаты', PLANNED_SUPPLEMENT_COLUMNS);
 export const buildCompensationStopExport = buildSnapshot('Без проезда', COMPENSATION_STOP_COLUMNS);
 export const buildOvertimeStopExport = buildSnapshot('Без переработки', OVERTIME_STOP_COLUMNS);
@@ -419,8 +431,9 @@ const compareSupplementRows = (a: ISupplementRegistryRow, b: ISupplementRegistry
 /**
  * Строки «Доплаты за месяц» в выбранных месяцах: плановые по периоду и разовые за месяц (supplementInMonths) и квартиры —
  * сервер их уже разложил по месяцам с суммой за месяц (listHousingByMonth). «Основание» плановой — её комментарий
- * (миграция 364), у разовой — основание из списка, у квартиры — «Квартира». Порядок — по сотруднику, у него —
- * плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки сотрудника идут подряд.
+ * (миграция 364), у разовой — основание из списка и комментарий отдельно (миграция 385), у квартиры — «Квартира».
+ * Порядок — по сотруднику, у него — плановые, квартира, разовые по периоду: сортировка таблицы устойчивая, строки
+ * сотрудника идут подряд.
  * Пока один из источников не загружен (или не загрузился) — undefined: строки из половины данных не строятся.
  */
 export const buildSupplementRegistryRows = (
@@ -436,6 +449,7 @@ export const buildSupplementRegistryRows = (
         ...row,
         key: supplementRowKey(row),
         reason: row.kind === 'planned' ? row.comment ?? null : row.reason,
+        comment: row.kind === 'one_time' ? row.comment ?? null : null,
         supplement: row,
         housing: null,
       })),
@@ -451,6 +465,7 @@ export const buildSupplementRegistryRows = (
       date_to: null,
       month: row.month,
       reason: APARTMENT_REASON,
+      comment: null,
       can_edit: row.can_edit,
       supplement: null,
       housing: row,

@@ -36,7 +36,7 @@ describe('основание разовой доплаты: выпадающий
   });
 
   it('основание не выбрано — «Выберите основание»', () => {
-    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '1000', reason: '' })).toEqual({
+    expect(parseOneTimeForm({ selected: true, month: '2026-10', amount: '1000', reason: '', comment: '' })).toEqual({
       ok: false, field: 'reason', message: 'Выберите основание',
     });
   });

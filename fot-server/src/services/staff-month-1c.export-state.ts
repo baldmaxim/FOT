@@ -11,11 +11,9 @@ import { query, withTransaction } from '../config/postgres.js';
 import {
   checkStaffMonthAck,
   nextStaffMonthRevisions,
-  staffMonthExportState,
   type IStaffMonthAck,
   type IStaffMonthState,
   type StaffMonthAckRejection,
-  type StaffMonthExportState,
 } from './staff-month-1c.export-state.rules.js';
 import type { StaffMonthHalf } from './staff-month-1c.rules.js';
 
@@ -213,63 +211,3 @@ export const ackStaffMonth = async (input: {
   }
   return result;
 });
-
-export interface IZup3ExportCell {
-  month: string;
-  half: StaffMonthHalf;
-  state: StaffMonthExportState;
-  acked_at: string | null;
-  document_ref: string | null;
-  computed_at: string | null;
-}
-
-/** Статусы для «Расчётов»: сотрудник → по месяцам и половинам, только чтение (без пересчёта). */
-export const loadZup3ExportStates = async (
-  employeeIds: readonly number[],
-  months: readonly string[],
-): Promise<Map<number, IZup3ExportCell[]>> => {
-  const result = new Map<number, IZup3ExportCell[]>();
-  if (employeeIds.length === 0 || months.length === 0) return result;
-  const monthStarts = months.map(month => `${month}-01`);
-  const [states, acks] = await Promise.all([
-    query<IStateRow & { month: string; half: number }>(
-      `SELECT to_char(s.month, 'YYYY-MM') AS month, s.half, s.employee_id, r.state_revision, r.present, r.preliminary,
-              r.content_hash, ${ISO('r.computed_at')} AS computed_at
-         FROM staff_month_1c_half_states s
-         JOIN staff_month_1c_half_revisions r
-           ON r.employee_id = s.employee_id AND r.month = s.month AND r.half = s.half AND r.state_revision = s.current_revision
-        WHERE s.employee_id = ANY($1::int[]) AND s.month = ANY($2::date[])`,
-      [[...employeeIds], monthStarts],
-    ),
-    query<IAckRow & { month: string; half: number }>(
-      `SELECT DISTINCT ON (employee_id, month, half) employee_id, to_char(month, 'YYYY-MM') AS month, half, state_revision,
-              ${ISO('acked_at')} AS acked_at, document_ref
-         FROM staff_month_1c_half_exports
-        WHERE employee_id = ANY($1::int[]) AND month = ANY($2::date[])
-        ORDER BY employee_id, month, half, state_revision DESC`,
-      [[...employeeIds], monthStarts],
-    ),
-  ]);
-  const keyOf = (employeeId: number, month: string, half: number): string => `${employeeId}|${month}|${half}`;
-  const ackOf = new Map(acks.map(row => [keyOf(Number(row.employee_id), row.month, Number(row.half)), row]));
-  for (const row of states) {
-    const employeeId = Number(row.employee_id);
-    const half = Number(row.half) as StaffMonthHalf;
-    const ack = ackOf.get(keyOf(employeeId, row.month, half));
-    const state = staffMonthExportState(toState(row), ack ? {
-      revision: Number(ack.state_revision), ackedAt: ack.acked_at, documentRef: ack.document_ref,
-    } : undefined);
-    if (!state) continue;
-    const list = result.get(employeeId) ?? [];
-    list.push({
-      month: row.month,
-      half,
-      state,
-      acked_at: ack?.acked_at ?? null,
-      document_ref: ack?.document_ref ?? null,
-      computed_at: row.computed_at ?? null,
-    });
-    result.set(employeeId, list.sort((a, b) => a.month.localeCompare(b.month) || a.half - b.half));
-  }
-  return result;
-};

@@ -68,12 +68,13 @@ export const parsePlannedForm = (draft: {
   };
 };
 
-/** Разовая доплата: месяц, сумма, основание (обязательно). */
+/** Разовая доплата: месяц, сумма, основание (обязательно), комментарий (необязательно, миграция 385). */
 export const parseOneTimeForm = (draft: {
   selected: boolean;
   month: string;
   amount: string;
   reason: string;
+  comment: string;
 }): RegistryFormParse<IOneTimeSupplementFields> => {
   if (!draft.selected) return fail('employee', 'Выберите сотрудника');
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(draft.month)) return fail('month', 'Укажите месяц');
@@ -82,7 +83,9 @@ export const parseOneTimeForm = (draft: {
   const reason = draft.reason.replace(/\s+/g, ' ').trim();
   if (!reason) return fail('reason', 'Выберите основание');
   if (reason.length > SUPPLEMENT_REASON_MAX_LENGTH) return fail('reason', 'Основание — не больше 200 символов');
-  return { ok: true, payload: { month: draft.month, amount: amount.amount, reason } };
+  const comment = parsePlannedComment(draft.comment);
+  if ('error' in comment) return fail('comment', comment.error);
+  return { ok: true, payload: { month: draft.month, amount: amount.amount, reason, comment: comment.comment } };
 };
 
 /**

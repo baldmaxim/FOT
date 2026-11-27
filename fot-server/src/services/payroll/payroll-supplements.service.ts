@@ -6,8 +6,9 @@
  * миграция 364). Добавление — новая строка (отказ — только полный дубль: сумма, даты и комментарий); правка или снятие
  * строки из таблицы — rewritePlannedPeriod: строка в архив, новая с replaces_id (payroll-planned-supplement-rows.ts).
  * Все записи — под блокировкой сотрудника (lockPayrollEmployee).
- * Разовая — payroll_one_time_supplements: месяц, сумма, основание; за месяц — сколько угодно. Файлы разовой
- * (миграция 354) — payroll_one_time_supplement_files: строка — объект R2; объекты грузит и удаляет контроллер.
+ * Разовая — payroll_one_time_supplements: месяц, сумма, основание, комментарий (миграция 385); за месяц — сколько
+ * угодно. Файлы разовой (миграция 354) — payroll_one_time_supplement_files: строка — объект R2; объекты грузит и
+ * удаляет контроллер.
  */
 import type { PoolClient } from 'pg';
 
@@ -67,7 +68,7 @@ export interface IPayrollSupplementRow {
   /** Разовая: YYYY-MM. */
   month: string | null;
   reason: string | null;
-  /** Плановая: комментарий периода (миграция 364); у разовой — null. */
+  /** Плановая — комментарий периода (миграция 364), разовая — комментарий доплаты (миграция 385). */
   comment: string | null;
   /** Файлы разовой (по порядку прикрепления); у плановой — пусто. */
   files: IOneTimeSupplementFile[];
@@ -81,6 +82,7 @@ export interface IOneTimeSupplement {
   month: string;
   amount: string;
   reason: string;
+  comment: string | null;
   files: IOneTimeSupplementFile[];
 }
 
@@ -89,6 +91,8 @@ export interface IOneTimeSupplementInput {
   month: string;
   amount: number;
   reason: string;
+  /** null — без комментария; undefined (прежний клиент) — при добавлении null, при правке прежний. */
+  comment?: string | null;
 }
 
 /** Файлы разовой доплаты `alias` JSON-массивом по порядку прикрепления. */
@@ -126,7 +130,7 @@ export const listSupplements = async (scope: {
          JOIN payroll_planned_supplements c ON c.id = v.id
        UNION ALL
        SELECT 'one_time'::text, o.id, s.id, s.full_name, s.department, s.position,
-              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, NULL, ${oneTimeFilesSql('o')}
+              o.amount::text, NULL, NULL, to_char(o.month, 'YYYY-MM'), o.reason, o.comment, ${oneTimeFilesSql('o')}
          FROM staff s
          JOIN payroll_one_time_supplements o ON o.employee_id = s.id
      ) rows
@@ -232,7 +236,7 @@ export const listEmployeePlannedSupplements = async (employeeId: number): Promis
 
 const ONE_TIME_SELECT = `
   SELECT o.id, o.employee_id, e.full_name, to_char(o.month, 'YYYY-MM') AS month, o.amount::text AS amount, o.reason,
-         ${oneTimeFilesSql('o')} AS files
+         o.comment, ${oneTimeFilesSql('o')} AS files
     FROM payroll_one_time_supplements o
     JOIN employees e ON e.id = o.employee_id`;
 
@@ -276,9 +280,9 @@ export const addOneTimeSupplement = async (
   options: { files?: readonly INewOneTimeSupplementFile[]; audit?: OneTimeAuditFn<[IOneTimeSupplement]> } = {},
 ): Promise<IOneTimeSupplement> => withTransaction(async client => {
   const row = (await client.query<{ id: number }>(
-    `INSERT INTO payroll_one_time_supplements (employee_id, month, amount, reason)
-     VALUES ($1, ($2 || '-01')::date, $3::numeric, $4) RETURNING id`,
-    [employeeId, input.month, input.amount, input.reason],
+    `INSERT INTO payroll_one_time_supplements (employee_id, month, amount, reason, comment)
+     VALUES ($1, ($2 || '-01')::date, $3::numeric, $4, $5) RETURNING id`,
+    [employeeId, input.month, input.amount, input.reason, input.comment ?? null],
   )).rows[0];
   if (!row) throw new Error('Разовая доплата не добавлена');
   await insertOneTimeFiles(client, row.id, options.files ?? []);
@@ -305,8 +309,8 @@ export type OneTimeUpdateResult =
   };
 
 /**
- * Изменить месяц, сумму и основание, снять файлы removeFileIds и добавить addFiles (уже в R2) — одной
- * транзакцией под блокировкой доплаты. Аудит (если изменилось хоть что-то) — в той же транзакции.
+ * Изменить месяц, сумму, основание и комментарий (undefined — прежний), снять файлы removeFileIds и добавить addFiles
+ * (уже в R2) — одной транзакцией под блокировкой доплаты. Аудит (если изменилось хоть что-то) — в той же транзакции.
  */
 export const updateOneTimeSupplement = async (
   id: number,
@@ -328,9 +332,10 @@ export const updateOneTimeSupplement = async (
   }
   await client.query(
     `UPDATE payroll_one_time_supplements
-        SET month = ($2 || '-01')::date, amount = $3::numeric, reason = $4, updated_at = now()
+        SET month = ($2 || '-01')::date, amount = $3::numeric, reason = $4, comment = $5, updated_at = now()
       WHERE id = $1`,
-    [id, input.month, input.amount, input.reason],
+    // before прочитан под блокировкой строки: прежний комментарий не перезапишет чужую правку.
+    [id, input.month, input.amount, input.reason, input.comment === undefined ? before.comment : input.comment],
   );
   const removedKeys = removeIds.length === 0 ? [] : (await client.query<{ r2_key: string }>(
     `DELETE FROM payroll_one_time_supplement_files WHERE supplement_id = $1 AND id = ANY($2::int[]) RETURNING r2_key`,
@@ -340,7 +345,7 @@ export const updateOneTimeSupplement = async (
   const after = await readOneTime(client, id, false);
   if (!after) return { status: 'not_found' };
   const changed = before.month !== after.month || before.amount !== after.amount || before.reason !== after.reason
-    || removeIds.length > 0 || addFiles.length > 0;
+    || before.comment !== after.comment || removeIds.length > 0 || addFiles.length > 0;
   if (changed) await options.audit?.(client, before, after);
   return { status: 'saved', before, after, changed, removedKeys };
 });

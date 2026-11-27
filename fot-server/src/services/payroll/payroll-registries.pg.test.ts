@@ -254,6 +254,9 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
     // 354 — файлы разовых доплат; повтор безопасен.
     await run(migration('354_payroll_one_time_supplement_files.sql'));
     await run(migration('354_payroll_one_time_supplement_files.sql'));
+    // 385 — комментарий разовой доплаты; повтор безопасен.
+    await run(migration('385_payroll_one_time_supplement_comment.sql'));
+    await run(migration('385_payroll_one_time_supplement_comment.sql'));
     // 324 — значения по месяцам и «Проезд»; ставки с кодом — первыми.
     await run(migration('324_payroll_rate_values.sql'));
     await run(migration('324_payroll_rate_values.sql'));
@@ -768,6 +771,42 @@ describe.skipIf(!PG_URL)('таблицы «Справочника» на Postgre
       expect(deleted?.r2Keys).toHaveLength(9);
       expect((await run('SELECT count(*)::int AS n FROM payroll_one_time_supplement_files WHERE supplement_id = $1', [created.id])).rows[0].n).toBe(0);
       expect(audited).toEqual(['add 8', 'update 10→9', 'delete 9']);
+    });
+
+    it('385: комментарий разовой — в списке; правка без ключа оставляет, null стирает; правка одного комментария — аудит', async () => {
+      const created = await addOneTimeSupplement(2, { month: '2026-09', amount: 700, reason: 'Премия', comment: 'за сдачу объекта' });
+      expect(created.comment).toBe('за сдачу объекта');
+      const plain = await addOneTimeSupplement(2, { month: '2026-09', amount: 800, reason: 'Премия' });
+      expect(plain.comment).toBeNull();
+      const listed = (await listSupplements(SCOPE)).filter(row => row.kind === 'one_time' && row.month === '2026-09');
+      expect(listed.map(row => [row.amount, row.comment])).toEqual(expect.arrayContaining([
+        ['700.00', 'за сдачу объекта'],
+        ['800.00', null],
+      ]));
+
+      const input = { month: '2026-09', amount: 700, reason: 'Премия' };
+      const audited: Array<[string | null, string | null]> = [];
+      const audit = async (_client: unknown, before: { comment: string | null }, after: { comment: string | null }) => {
+        audited.push([before.comment, after.comment]);
+      };
+      // Прежний клиент без ключа: комментарий на месте, ничего не изменилось — аудита нет.
+      const kept = await updateOneTimeSupplement(created.id, input, { audit });
+      expect(kept).toMatchObject({ status: 'saved', changed: false, after: { comment: 'за сдачу объекта' } });
+      // Правка одного комментария — изменение с аудитом.
+      const edited = await updateOneTimeSupplement(created.id, { ...input, comment: 'по приказу № 12' }, { audit });
+      expect(edited).toMatchObject({ status: 'saved', changed: true, after: { comment: 'по приказу № 12' } });
+      // null — стереть.
+      const cleared = await updateOneTimeSupplement(created.id, { ...input, comment: null }, { audit });
+      expect(cleared).toMatchObject({ status: 'saved', changed: true, after: { comment: null } });
+      expect(audited).toEqual([['за сдачу объекта', 'по приказу № 12'], ['по приказу № 12', null]]);
+
+      // CHECK 385: пробелы по краям, пустая строка и длиннее 500 — отказ БД.
+      for (const comment of [' с пробелом', '', 'я'.repeat(501)]) {
+        await expect(run('UPDATE payroll_one_time_supplements SET comment = $2 WHERE id = $1', [created.id, comment]))
+          .rejects.toMatchObject({ code: '23514' });
+      }
+      await run('UPDATE payroll_one_time_supplements SET comment = $2 WHERE id = $1', [created.id, 'я'.repeat(500)]);
+      await run('DELETE FROM payroll_one_time_supplements WHERE id = ANY($1::int[])', [[created.id, plain.id]]);
     });
 
     it('340: основания — виды 1С и внесённые (пробелы схлопнуты, длиннее 100 — нет); переименование — и у доплат', async () => {

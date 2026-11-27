@@ -59,7 +59,6 @@ import {
   type ProrationRounding,
 } from '../services/payroll/payroll-terms.service.js';
 import { PAYROLL_PAID_ACCRUAL_CODES, PAYROLL_PAID_DEDUCTION_CODES } from '../services/payroll/payroll-paid.service.js';
-import { loadZup3ExportStates } from '../services/staff-month-1c.export-state.js';
 import {
   CALC_COLUMNS_MAX_MONTHS,
   calcColumnsServerTiming,
@@ -1253,21 +1252,9 @@ const calcColumns = async (req: AuthenticatedRequest, res: Response): Promise<vo
     if (slot.status === 'aborted') return;
     const columns = slot.result;
     res.setHeader('Server-Timing', [payrollQueueServerTiming('normal', slot), calcColumnsServerTiming(timing)].join(', '));
-    // Статус выгрузки объектов и часов в ЗУП3 по месяцам (миграция 373) — чтение готовых состояний, без пересчёта.
-    // Вспомогательный: сбой чтения не роняет столбцы ФОТ, строки просто без статуса.
-    const zup3 = await loadZup3ExportStates(allowedIds, months).catch((err: unknown) => {
-      console.error('payrollTerms.calcColumns zup3 export states error:', err);
-      return new Map<number, Awaited<ReturnType<typeof loadZup3ExportStates>> extends Map<number, infer T> ? T : never>();
-    });
     res.json({
       success: true,
-      data: {
-        available: true,
-        rows: allowedIds.map(id => {
-          const cells = zup3.get(id);
-          return { employee_id: id, calc: columns.get(id) ?? null, ...(cells && cells.length > 0 ? { zup3_export: cells } : {}) };
-        }),
-      },
+      data: { available: true, rows: allowedIds.map(id => ({ employee_id: id, calc: columns.get(id) ?? null })) },
     });
   } catch (err) {
     if (handleZodError(err, res)) return;

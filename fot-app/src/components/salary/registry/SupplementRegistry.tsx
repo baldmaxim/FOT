@@ -90,6 +90,7 @@ const PLANNED_CELL_RENDERERS = {
  * (миграция 339), в окне сотрудника «Компенсация → Проживание» — только показ. ✎ и 🗑 у строки — те же окна и правила
  * на всех вкладках (useSupplementRemoval).
  * «Файлы» разовой (миграция 354): 📎N — один файл открывается сразу, несколько — окно списка; ссылка — по клику.
+ * Комментарий разовой (миграция 385) — под основанием, до двух строк, полностью — подсказкой.
  */
 export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onClose }) => {
   const tabsId = useId();
@@ -143,26 +144,32 @@ export const SupplementRegistry: FC<ISupplementRegistryProps> = ({ canEdit, onCl
     if (files.length === 1) openFile(row.id, files[0]);
     else setFilesRow(row);
   }, [openFile]);
-  // 📎N — у основания разовой с файлами (отдельному столбцу на 1280px места нет); у плановой основание — комментарий.
+  // Разовая: под основанием — комментарий, справа — 📎N (отдельным столбцам на 1280px места нет); у плановой основание —
+  // её комментарий.
   const cellRenderers = useMemo(() => ({
     reason: (row: ISupplementRegistryRow): ReactNode | undefined => {
       if (row.kind === 'planned') return commentCell(row.reason);
       const count = supplementFileCount(row);
       const { supplement } = row;
-      if (count === null || !supplement) return undefined;
+      if (!supplement || (count === null && !row.comment)) return undefined;
       return (
         <span className={fileStyles.reasonCell}>
-          <span className={fileStyles.reasonText}>{row.reason ?? '—'}</span>
-          <button
-            type="button"
-            className={fileStyles.cellButton}
-            title="Файлы"
-            aria-label={`Файлы: ${row.full_name}, ${count}`}
-            onClick={() => openRowFiles(supplement)}
-          >
-            <Paperclip size={14} aria-hidden="true" />
-            {count}
-          </button>
+          <span className={fileStyles.reasonBody}>
+            <span className={fileStyles.reasonText}>{row.reason ?? '—'}</span>
+            {row.comment && <span className={fileStyles.reasonComment} title={row.comment}>{row.comment}</span>}
+          </span>
+          {count !== null && (
+            <button
+              type="button"
+              className={fileStyles.cellButton}
+              title="Файлы"
+              aria-label={`Файлы: ${row.full_name}, ${count}`}
+              onClick={() => openRowFiles(supplement)}
+            >
+              <Paperclip size={14} aria-hidden="true" />
+              {count}
+            </button>
+          )}
         </span>
       );
     },

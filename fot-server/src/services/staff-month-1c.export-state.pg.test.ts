@@ -38,7 +38,6 @@ import {
   ackStaffMonth,
   loadStaffMonthBuild,
   loadStaffMonthExportInfo,
-  loadZup3ExportStates,
   persistStaffMonthStates,
 } from './staff-month-1c.export-state.js';
 import { staffMonthExportState } from './staff-month-1c.export-state.rules.js';
@@ -139,15 +138,6 @@ describe.skipIf(!PG_URL)('staff-month-1c.export-state — половины на 
     info = await loadStaffMonthExportInfo('2026-10', 1);
     expect(staffMonthExportState(info.states.get(1), info.acks.get(1))).toBe('exported');
     expect(staffMonthExportState(info.states.get(2), info.acks.get(2))).toBeNull(); // удаление подтверждено
-
-    // «Расчёты»: по сотрудникам, месяцам и половинам; надгробие не показывается.
-    const cells = await loadZup3ExportStates([1, 2, 3], ['2026-10', '2026-11']);
-    expect(cells.get(1)).toEqual([
-      expect.objectContaining({ month: '2026-10', half: 1, state: 'exported', document_ref: 'ЗУП-16' }),
-      expect.objectContaining({ month: '2026-10', half: 2, state: 'ready', acked_at: null }),
-    ]);
-    expect(cells.get(2)).toEqual([expect.objectContaining({ half: 2, state: 'not_ready' })]);
-    expect(cells.get(3)).toEqual([expect.objectContaining({ half: 1, state: 'ready' })]);
 
     // Удаление сотрудника — каскадом.
     await sql('DELETE FROM employees WHERE id = 1');

@@ -1,7 +1,7 @@
 /**
- * «Доплата» → разовая доплата (миграция 315) и её файлы (миграция 354): месяц, сумма, основание; вносится
- * только в «Справочнике». Файлы приходят с сохранением доплаты одним multipart-запросом (поле data — JSON
- * полей, files — файлы), снятие — remove_file_ids. Доплата, строки файлов и аудит — одной транзакцией;
+ * «Доплата» → разовая доплата (миграция 315) и её файлы (миграция 354): месяц, сумма, основание, необязательный
+ * комментарий (миграция 385); вносится только в «Справочнике». Файлы приходят с сохранением доплаты одним
+ * multipart-запросом (поле data — JSON полей, files — файлы), снятие — remove_file_ids. Доплата, строки файлов и аудит — одной транзакцией;
  * объекты R2 — до неё (откат — удаление загруженного) и после коммита (снятые, best-effort). Ссылку на файл
  * выдаёт отдельный GET по клику.
  */
@@ -38,6 +38,7 @@ import {
   parsePayrollDictionaryId,
   payrollEmployeeIdSchema,
   payrollMonthSchema,
+  payrollPlannedCommentSchema,
   payrollPositiveMoneySchema,
 } from './payroll-dictionary.helpers.js';
 
@@ -47,6 +48,8 @@ const oneTimeFields = {
   reason: z.string({ required_error: 'Укажите основание', invalid_type_error: 'Укажите основание' })
     .transform(value => value.replace(/\s+/g, ' ').trim())
     .pipe(z.string().min(1, 'Укажите основание').max(200, 'Основание — не больше 200 символов')),
+  // Ключа нет (прежний клиент) — undefined: при правке комментарий остаётся, при добавлении — без комментария.
+  comment: payrollPlannedCommentSchema,
 };
 const oneTimeAddSchema = z.object({ employee_id: payrollEmployeeIdSchema, ...oneTimeFields });
 // Правка: те же поля и необязательные id снимаемых файлов (прежний клиент их не шлёт).
@@ -85,6 +88,7 @@ const oneTimeAudit = (row: IOneTimeSupplement) => ({
   month: row.month,
   amount: row.amount,
   reason: row.reason,
+  comment: row.comment,
 });
 
 const filesAudit = (files: ReadonlyArray<{ file_name: string; file_size: number }>) => (
@@ -139,7 +143,7 @@ const handleUploadError = (err: unknown, res: Response): boolean => {
 };
 
 /**
- * POST /api/payroll/supplements/one-time — разовая доплата. JSON { employee_id, month, amount, reason } или
+ * POST /api/payroll/supplements/one-time — разовая доплата. JSON { employee_id, month, amount, reason, comment? } или
  * multipart: data — тот же JSON, files — до 10 файлов. Доплата, файлы и аудит — одной транзакцией.
  */
 const addOneTime = async (req: ISupplementFilesRequest, res: Response): Promise<void> => {
@@ -186,8 +190,8 @@ const addOneTime = async (req: ISupplementFilesRequest, res: Response): Promise<
 };
 
 /**
- * PATCH /api/payroll/supplements/one-time/:id { month, amount, reason, remove_file_ids? } — сотрудник не
- * меняется. Новые файлы — multipart (data + files). Снятые файлы удаляются из R2 после коммита.
+ * PATCH /api/payroll/supplements/one-time/:id { month, amount, reason, comment?, remove_file_ids? } — сотрудник не
+ * меняется; comment не передан — прежний. Новые файлы — multipart (data + files). Снятые файлы удаляются из R2 после коммита.
  */
 const updateOneTime = async (req: ISupplementFilesRequest, res: Response): Promise<void> => {
   try {
